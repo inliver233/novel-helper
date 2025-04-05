@@ -752,6 +752,10 @@ class NovelManager:
             # Add trash metadata (no need to write back to original)
             metadata["_original_category"] = original_category
             metadata["_deleted_at"] = now_iso
+            # 添加原始文件名，便于恢复时精确还原
+            metadata["_original_filename"] = path.name
+            # 添加完整路径信息
+            metadata["_original_path"] = str(path)
             # Ensure title field exists in metadata for trash filename
             metadata["title"] = metadata.get("title", path.stem)
 
@@ -767,7 +771,24 @@ class NovelManager:
                 trash_filename = f"{ts}_{base_name}_{counter}{path.suffix or '.md'}"
                 target_trash_path = self.trash_dir / trash_filename
 
-            # Move the file
+            # 先保存元数据到新文件，再移动
+            if path.suffix.lower() == ".md":
+                file_content = f"---\n{json.dumps(metadata, ensure_ascii=False, indent=2)}\n---\n\n{content}"
+                try:
+                    target_trash_path.write_text(file_content, encoding="utf-8")
+                    path.unlink()  # 删除原文件
+                    print(f"Created trashed file with metadata: {target_trash_path}")
+                    return True
+                except Exception as e:
+                    print(f"Error writing trash file, falling back to move: {e}")
+                    # 如果直接写入失败，回退到移动方法
+                    if target_trash_path.exists():
+                        try:
+                            target_trash_path.unlink()  # 清理失败的写入
+                        except:
+                            pass
+
+            # Move the file if we didn't successfully write it
             shutil.move(str(path), str(target_trash_path))
             print(f"Moved entry to trash: {target_trash_path}")
             return True
@@ -1010,50 +1031,106 @@ class NovelManager:
             raise FileNotFoundError(f"回收站项目不存在或路径无效: {trash_path}")
 
         target_path = None
+        original_path_str = None
+        debug_info = []  # 调试信息收集
+
+        debug_info.append(f"开始恢复: {trash_path}")
 
         # Handle .md files (restore to original category if possible)
         if trash_path.is_file() and trash_path.suffix == ".md":
-            entry_data = self.get_entry_by_path(trash_path, read_content=False)
-            original_category = entry_data.get("metadata", {}).get("_original_category") if entry_data else None
+            entry_data = self.get_entry_by_path(trash_path, read_content=True)
+            debug_info.append(f"读取元数据: {entry_data is not None}")
 
-            target_category_path = self.root_dir  # Default to root
-            if original_category and original_category != "_trash":
+            # 尝试从元数据中获取原始路径
+            if entry_data and entry_data.get("metadata"):
+                metadata = entry_data.get("metadata", {})
+                original_path_str = metadata.get("_original_path")
+                original_category = metadata.get("_original_category")
+                original_filename = metadata.get("_original_filename")
+                content = entry_data.get("content", "")
+
+                debug_info.append(f"原始路径: {original_path_str}")
+                debug_info.append(f"原始分类: {original_category}")
+                debug_info.append(f"原始文件名: {original_filename}")
+            else:
+                debug_info.append("未找到元数据或读取失败")
+                original_category = None
+                original_filename = None
+                content = ""
+
+            # 如果有原始路径，尝试直接使用
+            if original_path_str:
+                original_path = Path(original_path_str)
+                debug_info.append(f"尝试使用原始路径: {original_path}")
+
+                # 检查原始目录是否存在
+                if original_path.parent.exists() and original_path.parent.is_dir():
+                    target_path = original_path
+                    debug_info.append(f"原始目录存在，目标路径设为: {target_path}")
+                else:
+                    debug_info.append(f"原始目录不存在: {original_path.parent}")
+
+            # 如果无法直接使用原始路径，则尝试使用分类信息
+            if target_path is None and original_category:
                 target_category_path = self.root_dir / original_category
+                debug_info.append(f"使用原始分类建立路径: {target_category_path}")
+
+                # 确保分类目录存在
                 if not target_category_path.exists():
-                    print(f"Info: Creating missing category '{original_category}' during restore.")
+                    debug_info.append(f"创建缺失的分类目录: {original_category}")
                     try:
                         self.add_category(original_category)  # Creates dir and adds to list
                     except Exception as e:
-                        print(f"Warning: Failed to recreate category '{original_category}': {e}. Restoring to root.")
+                        debug_info.append(f"重建分类 '{original_category}' 失败: {e}")
                         target_category_path = self.root_dir
                 elif original_category not in self.categories:
                     # Add to list if dir exists but wasn't listed
                     self.categories.append(original_category)
                     self.categories.sort(key=lambda x: x.lower())
-            else:
-                print(f"Warning: Original category not found for {trash_path.name}. Restoring to root.")
+                    debug_info.append(f"分类目录已存在但不在列表中，已添加: {original_category}")
 
-            # Try to reconstruct original filename
-            original_filename_match = re.match(r"^\d{8}_\d{6}(?:_\d+)?_(.*)", trash_path.name)
-            base_filename = original_filename_match.group(1) if original_filename_match else trash_path.name
-            target_path = target_category_path / base_filename
+                # 确定目标文件名
+                if original_filename:
+                    target_path = target_category_path / original_filename
+                    debug_info.append(f"使用原始文件名构建目标路径: {target_path}")
+                else:
+                    # 尝试从回收站文件名还原原始文件名
+                    original_filename_match = re.match(r"^\d{8}_\d{6}(?:_\d+)?_(.*)", trash_path.name)
+                    base_filename = original_filename_match.group(1) if original_filename_match else trash_path.name
+                    target_path = target_category_path / base_filename
+                    debug_info.append(f"从垃圾文件名推导目标路径: {target_path}")
+
+            # 最后的回退方案：使用根目录
+            if target_path is None:
+                debug_info.append("无法确定原始位置，回退到根目录")
+
+                # 尝试从回收站文件名还原原始文件名
+                original_filename_match = re.match(r"^\d{8}_\d{6}(?:_\d+)?_(.*)", trash_path.name)
+                base_filename = original_filename_match.group(1) if original_filename_match else trash_path.name
+                target_path = self.root_dir / base_filename
+                debug_info.append(f"目标路径设为根目录: {target_path}")
 
         # Handle directories (restore to root)
         elif trash_path.is_dir():
             category_name = re.sub(r'_\d+$', '', trash_path.name)  # Remove potential _1, _2 suffix
             target_path = self.root_dir / category_name
+            debug_info.append(f"恢复目录，目标路径: {target_path}")
 
             # Add category back to list if necessary (use cleaned name)
             if category_name not in self.categories:
-                # Check if dir exists physically before adding to list
-                if not (self.root_dir / category_name).exists():
+                # 修复：先创建目录，然后再添加到列表
+                try:
+                    (self.root_dir / category_name).mkdir(exist_ok=True)
                     self.categories.append(category_name)
                     self.categories.sort(key=lambda x: x.lower())
-                else:
-                    print(f"Info: Directory '{category_name}' already exists, not adding duplicate to list.")
+                    debug_info.append(f"重建分类目录: {category_name}")
+                except Exception as e:
+                    debug_info.append(f"创建分类目录 '{category_name}' 失败: {e}")
+            else:
+                debug_info.append(f"分类 '{category_name}' 已存在，不重复添加")
 
         else:  # Unsupported item type? Restore to root.
-            print(f"Warning: Unsupported item type in trash: {trash_path.name}. Restoring to root.")
+            debug_info.append(f"不支持的项目类型: {trash_path.name}，恢复到根目录")
             target_path = self.root_dir / trash_path.name
 
         # Handle name collisions at target location
@@ -1062,20 +1139,53 @@ class NovelManager:
             original_target_path = target_path
             while target_path.exists():
                 counter += 1
-                stem = original_target_path.stem
-                suffix = original_target_path.suffix
-                if original_target_path.is_dir(): suffix = ""  # No suffix for dirs
-                target_path = original_target_path.parent / f"{stem}_{counter}{suffix}"
+                debug_info.append(f"文件名冲突，尝试生成替代名 (计数器: {counter})")
+
+                # 修复：使用与新建文件相同的命名方式，确保在文件名冲突时生成合适的文件名
+                if target_path.is_file() and target_path.suffix == ".md":
+                    # 使用时间戳和计数器生成一个唯一的文件名，类似于新建文件
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    base_name = original_target_path.stem
+                    target_path = original_target_path.parent / f"{timestamp}_{counter}_{base_name}{original_target_path.suffix}"
+                else:
+                    # 对于目录或其他文件类型，使用简单的计数器
+                    stem = original_target_path.stem
+                    suffix = original_target_path.suffix if not original_target_path.is_dir() else ""
+                    target_path = original_target_path.parent / f"{stem}_{counter}{suffix}"
+
+                debug_info.append(f"生成的新目标路径: {target_path}")
 
             try:
-                shutil.move(str(trash_path), str(target_path))
+                # 如果是 .md 文件，先清理元数据再保存到新位置
+                if trash_path.is_file() and trash_path.suffix == ".md" and entry_data:
+                    debug_info.append("清理元数据并直接写入新文件")
+                    metadata = entry_data.get("metadata", {}).copy()
+                    # 清理内部标记
+                    metadata.pop("_original_category", None)
+                    metadata.pop("_deleted_at", None)
+                    metadata.pop("_original_filename", None)
+                    metadata.pop("_original_path", None)
+
+                    # 重新保存文件
+                    file_content = f"---\n{json.dumps(metadata, ensure_ascii=False, indent=2)}\n---\n\n{content}"
+                    target_path.write_text(file_content, encoding="utf-8")
+                    # 删除原来的垃圾文件
+                    trash_path.unlink()
+                    debug_info.append(f"文件已恢复到: {target_path}")
+                else:
+                    # 对于非 .md 文件或没有元数据的情况，使用移动
+                    shutil.move(str(trash_path), str(target_path))
+                    debug_info.append(f"文件已移动到: {target_path}")
+
                 print(f"Restored '{trash_path.name}' to '{target_path}'")
-                if target_path.is_file() and target_path.suffix == ".md":
-                    self._cleanup_restored_metadata(target_path)
+                print(f"Debug info: {'; '.join(debug_info)}")
                 return str(target_path)
             except Exception as e:
+                debug_info.append(f"恢复失败: {e}")
+                print(f"Restore debug info: {'; '.join(debug_info)}")
                 raise OSError(f"无法恢复项目 '{trash_path.name}' 到 '{target_path}': {e}")
         else:
+            print(f"Restore debug info: {'; '.join(debug_info)}")
             raise ValueError(f"无法确定 '{trash_path.name}' 的恢复位置。")
 
     def _cleanup_restored_metadata(self, file_path):
@@ -2213,6 +2323,7 @@ class NovelManagerGUI:
 
         processed_count, errors, affected_categories = 0, [], set()
         action_verb = "恢复" if action == "restore" else "永久删除"
+        restored_paths = []  # 记录恢复的路径
 
         print(f"Trash action: {action} on {len(items_to_process)} items.")
         for item_path in items_to_process:
@@ -2222,12 +2333,14 @@ class NovelManagerGUI:
                     result = self.manager.restore_trash_item(str(item_path))
                     if result:
                         restored_path = Path(result)
+                        restored_paths.append(restored_path)
                         # Determine affected category/root
                         parent_dir = restored_path.parent
                         if parent_dir == self.manager.root_dir:
                             if restored_path.is_dir():  # Restored category to root
                                 affected_categories.add(restored_path.name)
-                            # else: file restored to root - doesn't affect category list directly
+                            else:  # 文件恢复到根目录
+                                affected_categories.add("ROOT")  # 标记根目录受影响
                         elif self.manager.root_dir in parent_dir.parents:  # Restored to a sub-category
                             affected_categories.add(parent_dir.name)
 
@@ -2238,36 +2351,37 @@ class NovelManagerGUI:
 
             except Exception as e:
                 errors.append(f"{action_verb} '{item_path.name}': {e}")
+                print(f"Error during {action}: {e}")
 
-        # Refresh UI
-        if processed_count > 0:
-            # Reload categories if restore *might* have added/changed them
-            # Manager methods update self.manager.categories internally if needed.
-            # Check if any *new* category name appeared in affected_categories.
-            reload_cats = False
-            if action == "restore" and affected_categories:
-                reload_cats = any(cat not in self.manager.categories for cat in affected_categories if
-                                  cat != self.manager.root_dir.name)
-                # Or simply reload if any category was involved
-                # reload_cats = True
-
-            if reload_cats:
-                print("Reloading categories after restore operation.")
-                self.load_categories()
-
-            # Refresh entry list/search
-            if self.is_search_active:
-                self.on_search()
-            elif action == "restore" and self.current_category in affected_categories:
-                # If the currently viewed category was the target of a restore
-                self.load_entries(self.current_category)
-
-        # Show results
+        # 显示结果信息
         if errors:
-            messagebox.showerror(f"{action_verb}错误", f"{action_verb}部分项目时出错:\n" + "\n".join(errors),
+            messagebox.showerror(f"{action_verb}错误",
+                                 f"{action_verb}时出错 ({len(errors)}/{len(items_to_process)}项失败):\n" + "\n".join(
+                                     errors[:5]),
                                  parent=self.root)
         elif processed_count > 0:
-            messagebox.showinfo("成功", f"{processed_count} 个项目已{action_verb}。", parent=self.root)
+            messagebox.showinfo("成功", f"已{action_verb} {processed_count} 个项目。", parent=self.root)
+
+        # 更新 UI 以显示恢复的项目
+        if action == "restore" and processed_count > 0:
+            print(f"Restored paths: {restored_paths}")
+            print(f"Affected categories: {affected_categories}")
+
+            # 重新加载分类列表（如果有新分类被恢复）
+            if affected_categories:
+                self.load_categories()
+
+            # 如果当前分类是受影响的分类之一，重新加载条目
+            if self.current_category in affected_categories:
+                self.load_entries(self.current_category)
+            # 如果根目录受影响，需要手动刷新
+            elif "ROOT" in affected_categories:
+                self.on_refresh()
+            # 或者执行完整刷新，确保所有恢复的文件都可见
+            else:
+                self.on_refresh()
+
+        # 如果是删除操作，不需要特别的UI刷新
 
     def on_empty_trash(self):
         """Permanently delete all items in trash."""
