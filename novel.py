@@ -385,7 +385,7 @@ class TrashDialog(Toplevel):
         # 如果父窗口是 CTk，尝试获取更精确的颜色
         list_bg, list_fg, list_select_bg, list_select_fg = None, None, None, None
         list_hl_bg, list_hl_color = None, None
-        dialog_fg = 'black'  # Default text color
+        dialog_fg = 'white'  # 默认文本颜色改为白色，更适合深色背景
 
         if HAS_CTK and isinstance(parent, ctk.CTk):
             current_mode = ctk.get_appearance_mode().lower()
@@ -417,28 +417,39 @@ class TrashDialog(Toplevel):
         main_frame = ttk.Frame(self, padding="15")  # 增加内边距
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text="回收站中的项目 (文件或分类):", font=("Microsoft YaHei UI", 13, "bold")).pack(
-            anchor=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="回收站中的项目 (文件或分类):",
+                  font=("Microsoft YaHei UI", 13, "bold"),
+                  foreground=dialog_fg).pack(anchor=tk.W, pady=(0, 10))
 
         list_frame = ttk.Frame(main_frame)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL)
-        self.listbox = Listbox(list_frame, yscrollcommand=scrollbar.set, selectmode=tk.EXTENDED,
-                               exportselection=False, relief=tk.FLAT, borderwidth=1,
-                               font=("Microsoft YaHei UI", 15), activestyle='none')
+        self.listbox = Listbox(
+            list_frame,
+            yscrollcommand=scrollbar.set,
+            selectmode=tk.EXTENDED,
+            exportselection=False,
+            relief=tk.FLAT,
+            borderwidth=1,
+            font=("Microsoft YaHei UI", 15),
+            activestyle='none',
+            bd=10,  # 添加内边距但不改变数据
+            fg="white"  # 设置文本颜色为白色
+        )
         scrollbar.config(command=self.listbox.yview)
 
-        # 应用颜色 (如果来自 CTk 父窗口且获取成功)
-        if list_bg: self.listbox.config(bg=list_bg)
-        if list_fg:
-            self.listbox.config(fg=list_fg)
-        else:
-            self.listbox.config(fg=dialog_fg)  # 使用对话框文本色
-        if list_select_bg: self.listbox.config(selectbackground=list_select_bg)
-        if list_select_fg: self.listbox.config(selectforeground=list_select_fg)
-        if list_hl_bg: self.listbox.config(highlightbackground=list_hl_bg, highlightthickness=1)
-        if list_hl_color: self.listbox.config(highlightcolor=list_hl_color)
+        # 始终使用深色背景和白色文本
+        select_bg = "#464646"  # 深灰色背景
+        select_fg = "white"  # 白色文本
+        list_bg = "#2b2b2b"  # 深灰色背景
+
+        # 应用颜色
+        self.listbox.config(
+            selectbackground=select_bg,
+            selectforeground=select_fg,
+            bg=list_bg
+        )
 
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -452,14 +463,60 @@ class TrashDialog(Toplevel):
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X)
 
-        restore_button = ttk.Button(button_frame, text="恢复选中项", command=self.on_restore)
-        restore_button.pack(side=tk.LEFT, padx=5, pady=5)
+        # 使用CTk按钮替代ttk按钮，确保按钮可见
+        if HAS_CTK:
+            # 获取当前主题模式和颜色
+            mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
+            # 从父窗口获取软色调颜色
+            soft_colors = parent.soft_colors[mode] if hasattr(parent, 'soft_colors') else {
+                "button_blue": "#4a6f8a",
+                "button_blue_hover": "#5a819b",
+                "button_red": "#8b4e52",
+                "button_red_hover": "#9b5e62",
+                "list_select_fg": "white"
+            }
 
-        delete_button = ttk.Button(button_frame, text="永久删除选中项", command=self.on_delete_selected)
-        delete_button.pack(side=tk.LEFT, padx=5, pady=5)
+            restore_button = ctk.CTkButton(
+                button_frame,
+                text="恢复选中项",
+                fg_color=soft_colors["button_blue"],
+                hover_color=soft_colors["button_blue_hover"],
+                text_color="white",
+                command=self.on_restore
+            )
+            restore_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        close_button = ttk.Button(button_frame, text="关闭", command=self.on_cancel)
-        close_button.pack(side=tk.RIGHT, padx=5, pady=5)
+            delete_button = ctk.CTkButton(
+                button_frame,
+                text="永久删除选中项",
+                fg_color=soft_colors["button_red"],
+                hover_color=soft_colors["button_red_hover"],
+                text_color="white",
+                command=self.on_delete_selected
+            )
+            delete_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+            close_button = ctk.CTkButton(
+                button_frame,
+                text="关闭",
+                fg_color=soft_colors["button_blue"],
+                hover_color=soft_colors["button_blue_hover"],
+                text_color="white",
+                command=self.on_cancel
+            )
+            close_button.pack(side=tk.RIGHT, padx=5, pady=5)
+        else:
+            # 使用高对比度的ttk按钮
+            style.configure("TButton", foreground="black", background="light gray")
+
+            restore_button = ttk.Button(button_frame, text="恢复选中项", command=self.on_restore)
+            restore_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+            delete_button = ttk.Button(button_frame, text="永久删除选中项", command=self.on_delete_selected)
+            delete_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+            close_button = ttk.Button(button_frame, text="关闭", command=self.on_cancel)
+            close_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
         self.wait_window(self)
@@ -1021,12 +1078,12 @@ class NovelManager:
 
 # --- Frontend GUI (NovelManagerGUI) ---
 class NovelManagerGUI:
-    def __init__(self, root):
+    def __init__(self, root, manager):
         self.root = root
         self.root.title("网文创作助手 V3.2 (界面修复)")
         self.root.geometry("1300x850")
 
-        self.manager = NovelManager()
+        self.manager = manager
         self.font_manager = FontManager()  # 创建字体管理器实例
         self.current_font = self.font_manager.current_font  # 当前字体
         self.font_size = 15  # 默认字体大小
@@ -1055,6 +1112,26 @@ class NovelManagerGUI:
 
         # Apply theme again after all widgets are created
         self._apply_theme()  # Ensure Listboxes etc. get themed
+
+        # 在初始化结束时添加UI美化
+        self._apply_ui_enhancements()
+
+        # 确保立即应用颜色到列表框
+        if hasattr(self, 'category_listbox'):
+            self._beautify_listbox(self.category_listbox)
+        if hasattr(self, 'entry_listbox'):
+            self._beautify_listbox(self.entry_listbox)
+
+        # 设置一个短暂延迟确保样式应用完成
+        self.root.after(100, self._ensure_listbox_styling)
+
+        # 确保在切换标签、点击列表等操作后重新应用样式
+        self.root.bind_all("<FocusIn>", self._delayed_style_refresh)
+        self.root.bind_all("<ButtonRelease-1>", self._delayed_style_refresh)
+
+    def _delayed_style_refresh(self, event=None):
+        """当焦点或鼠标点击发生变化时延迟刷新样式"""
+        self.root.after(50, self._ensure_listbox_styling)
 
     def _apply_initial_theme_settings(self):
         """Sets the initial theme based on detection or default."""
@@ -1096,6 +1173,33 @@ class NovelManagerGUI:
             # Default Tkinter theme
             self.current_theme_mode = "light"  # Assume light for default tk
             self._update_root_background()
+
+        # 在最后添加，确保在任何主题引擎下都能正确初始化
+        # 预先定义软色调颜色方案，供后续使用
+        self.soft_colors = {
+            "light": {
+                "list_bg": "#f8f8f8",  # 非常浅的灰色（列表背景）
+                "list_select_bg": "#e9eef2",  # 非常浅的蓝灰色（选中背景）
+                "list_select_fg": "#333333",  # 深灰色文本（选中文本）
+                "button_blue": "#a7c5eb",  # 柔和的淡蓝色（主按钮）
+                "button_blue_hover": "#89b0e0",  # 稍深的淡蓝（hover）
+                "button_red": "#f0b6bc",  # 柔和的淡红色（删除按钮）
+                "button_red_hover": "#e6a0a7",  # 稍深的淡红（hover）
+                "button_green": "#b7e0c4",  # 柔和的淡绿色（保存按钮）
+                "button_green_hover": "#a0d3b0"  # 稍深的淡绿（hover）
+            },
+            "dark": {
+                "list_bg": "#2a2a2a",  # 暗灰色（列表背景）
+                "list_select_bg": "#3f4e5d",  # 暗蓝灰色（选中背景）
+                "list_select_fg": "#ffffff",  # 白色文本（选中文本）
+                "button_blue": "#4a6f8a",  # 暗模式下的柔和蓝（主按钮）
+                "button_blue_hover": "#5a819b",  # 稍亮的蓝（hover）
+                "button_red": "#8b4e52",  # 暗模式下的柔和红（删除按钮）
+                "button_red_hover": "#9b5e62",  # 稍亮的红（hover）
+                "button_green": "#4d7359",  # 暗模式下的柔和绿（保存按钮）
+                "button_green_hover": "#5d8369"  # 稍亮的绿（hover）
+            }
+        }
 
     def _update_root_background(self):
         """Updates the root window background based on the current theme."""
@@ -1315,6 +1419,15 @@ class NovelManagerGUI:
             # Ensure theme is applied after loading items
             self._apply_theme()
 
+        # 加载完成后立即应用颜色
+        self._beautify_listbox(self.category_listbox)
+
+        # 如果已有条目列表，也美化它
+        if hasattr(self, 'entry_listbox') and self.entry_listbox.winfo_exists():
+            self._beautify_listbox(self.entry_listbox)
+
+        return True
+
     def load_entries(self, category):
         """Load entries for the selected category."""
         listbox = getattr(self, 'entry_listbox', None)
@@ -1359,6 +1472,9 @@ class NovelManagerGUI:
 
         # Re-apply theme to ensure listbox colors are correct after update
         self._apply_theme()
+
+        # 在方法末尾添加，确保列表项加载后应用颜色
+        self._beautify_listbox(self.entry_listbox)
 
     def load_search_results(self, results):
         """Load search results into the entry listbox."""
@@ -1473,106 +1589,81 @@ class NovelManagerGUI:
     # (on_category_select, on_entry_select, on_new_category, on_rename_category, on_delete_selected_category, on_new_entry, on_edit_selected_entry, on_save, on_delete_selected_entries, on_move_selected_entries, on_rename_entry, on_search, on_clear_search, on_view_trash, on_empty_trash - unchanged)
     def on_category_select(self, event=None):
         """Handle category selection."""
-        listbox = getattr(self, 'category_listbox', None)
-        if not listbox or not listbox.winfo_exists() or not listbox.curselection(): return
-        try:
-            index = listbox.curselection()[0]
-            selected_category = listbox.get(index)
-            # Check if selection is a placeholder like "(无分类)"
-            if selected_category.startswith("("):
-                self.current_category = None
-                self.load_entries(None)  # Clear entries and editor
-                return
-
-            if selected_category != self.current_category or self.is_search_active:
-                print(f"Category selected: {selected_category}")
-                self.current_category = selected_category
-                self.load_entries(self.current_category)  # Loads entries, clears editor
-                self.is_search_active = False
-        except (tk.TclError, IndexError):
-            print("Debug: Error getting category selection.")
-
-    def on_entry_select(self, event=None):
-        """Handle entry selection, load data."""
-        listbox = getattr(self, 'entry_listbox', None)
+        listbox = event.widget if event and hasattr(event, 'widget') else getattr(self, 'category_listbox', None)
         if not listbox or not listbox.winfo_exists(): return
 
-        selected_indices = listbox.curselection()
+        try:
+            selection = listbox.curselection()
+            if selection:
+                index = int(selection[0])
+                selected = listbox.get(index)
+                print(f"Category selected: {selected}")
 
-        if len(selected_indices) == 1:
-            index = selected_indices[0]
-            try:
-                selected_display_text = listbox.get(index)
-                # Handle placeholders explicitly
-                if selected_display_text.startswith(
-                        "(") or "无匹配结果" in selected_display_text or "加载错误" in selected_display_text:
-                    self.clear_editor(keep_selection=True);
-                    return
-            except tk.TclError:
-                return  # Error getting text
+                old_category = self.current_category
+                self.current_category = selected
 
-            entry_path = self.entry_data_map.get(selected_display_text)
-            valid_path = False
-            if entry_path:
-                try:
-                    valid_path = Path(entry_path).is_file()
-                except Exception:
-                    pass
+                if old_category != self.current_category:
+                    self.load_entries(self.current_category)
+            else:
+                # If selection is cleared, keep last category
+                pass
+        except Exception as e:
+            messagebox.showerror("错误", f"选择分类时出错: {e}", parent=self.root)
 
-            if valid_path:
-                # print(f"Loading entry: {entry_path}")
-                try:
-                    entry_data = self.manager.get_entry_by_path(entry_path, read_content=True)
-                    if entry_data:
-                        self.current_entry_path = entry_data["path"]
-                        metadata = entry_data.get("metadata", {})
-                        content = entry_data.get("content", "")
+        # 确保在选择后重新应用深色样式
+        self.root.after(10, lambda: self._beautify_listbox(listbox))
 
-                        self.title_var.set(metadata.get("title", Path(entry_path).stem))
-                        self.tags_var.set(", ".join(metadata.get("tags", [])))
+    def on_entry_select(self, event=None):
+        """Handle entry selection."""
+        listbox = event.widget if event and hasattr(event, 'widget') else getattr(self, 'entry_listbox', None)
+        if not listbox or not listbox.winfo_exists(): return
 
-                        # Load content into editor
-                        content_widget = getattr(self, 'content_text', None)
-                        if content_widget and content_widget.winfo_exists():
-                            start_index = "0.0" if isinstance(content_widget, ctk.CTkTextbox) else 1.0
-                            try:
-                                # Check if widget has delete method
-                                if hasattr(content_widget, 'delete'):
-                                    content_widget.delete(start_index, tk.END)
-                                # Check if widget has insert method
-                                if hasattr(content_widget, 'insert'):
-                                    content_widget.insert(start_index, content)
-                                # Check if widget has edit_reset method (for tk.Text)
-                                if isinstance(content_widget, tk.Text) and hasattr(content_widget, 'edit_reset'):
-                                    content_widget.edit_reset()
-                            except Exception as e:
-                                print(f"Error setting content text: {e}")
+        try:
+            selection = listbox.curselection()
+            if selection:
+                index = int(selection[0])
+                selected_entry = listbox.get(index)
 
-                        self._update_info_label(metadata)
-                    else:  # get_entry_by_path returned None
-                        messagebox.showerror("错误", f"无法读取条目数据:\n{entry_path}", parent=self.root)
-                        self.clear_editor()
-                except Exception as e:
-                    messagebox.showerror("加载错误", f"加载条目时出错:\n{entry_path}\n{e}", parent=self.root)
-                    import traceback;
-                    traceback.print_exc()
-                    self.clear_editor()
-            else:  # Invalid path in map or file missing
-                messagebox.showerror("错误", f"条目文件丢失或无效:\n'{selected_display_text}'", parent=self.root)
-                # Remove stale entry
-                if selected_display_text in self.entry_data_map: del self.entry_data_map[selected_display_text]
-                try:
-                    items = listbox.get(0, tk.END)
-                    stale_index = items.index(selected_display_text)
-                    listbox.delete(stale_index)
-                except (ValueError, tk.TclError):
-                    pass
-                self.clear_editor()
+                if selected_entry and not selected_entry.startswith("("):
+                    path = self.entry_data_map.get(selected_entry)
+                    if path and path != self.current_entry_path:
+                        print(f"Entry selected: {selected_entry}")
+                        self.current_entry_path = path
 
-        elif len(selected_indices) > 1:
-            self.clear_editor(keep_selection=True)  # Keep multi-selection visible
-        else:  # No selection
-            self.clear_editor()
+                        try:
+                            entry_data = self.manager.get_entry_by_path(path)
+                            if entry_data:
+                                # Update editor
+                                editor = getattr(self, 'content_text', None)
+                                if editor:
+                                    self.clear_editor(keep_selection=True)
+                                    if isinstance(editor, ctk.CTkTextbox):
+                                        editor.insert("1.0", entry_data.get("content", ""))
+                                    else:
+                                        editor.insert(tk.END, entry_data.get("content", ""))
+
+                                # Update tags/title
+                                title_var = getattr(self, 'title_var', None)
+                                tags_var = getattr(self, 'tags_var', None)
+                                metadata = entry_data.get("metadata", {})
+
+                                if title_var:
+                                    title_var.set(metadata.get("title", ""))
+                                if tags_var:
+                                    tags_var.set(", ".join(metadata.get("tags", [])))
+
+                                # Update info
+                                self._update_info_label(metadata)
+                        except Exception as e:
+                            messagebox.showerror("读取错误", f"读取条目时发生错误: {e}", parent=self.root)
+            else:
+                # Selection cleared
+                pass
+        except Exception as e:
+            print(f"Error in entry selection: {e}")
+
+        # 确保在选择后重新应用深色样式
+        self.root.after(10, lambda: self._beautify_listbox(listbox))
 
     def on_new_category(self):
         """Create a new category via dialog."""
@@ -2354,10 +2445,10 @@ class NovelManagerGUI:
                 menu.grab_release()
 
     # --- Theme Switching ---
-    def switch_theme(self, theme_name):
+    def switch_theme(self, theme):
         """Switch the application theme (CTk or sv-ttk)."""
-        print(f"Switching theme to: {theme_name}")
-        new_mode = theme_name.lower()
+        print(f"Switching theme to: {theme}")
+        new_mode = theme.lower()
 
         if HAS_CTK:
             if new_mode in ["light", "dark", "system"]:
@@ -2366,8 +2457,14 @@ class NovelManagerGUI:
                 self.current_theme_mode = ctk.get_appearance_mode().lower()
                 # Re-apply all theme-dependent settings
                 self._apply_theme()  # Updates root, listboxes, AND menus
+
+                # 更新所有列表框颜色
+                if hasattr(self, 'category_listbox') and self.category_listbox.winfo_exists():
+                    self._beautify_listbox(self.category_listbox)
+                if hasattr(self, 'entry_listbox') and self.entry_listbox.winfo_exists():
+                    self._beautify_listbox(self.entry_listbox)
             else:
-                print(f"Warning: Unknown CTk theme '{theme_name}'")
+                print(f"Warning: Unknown CTk theme '{theme}'")
         elif HAS_SVTTK:
             try:
                 if new_mode in ["light", "dark"]:
@@ -2377,11 +2474,21 @@ class NovelManagerGUI:
                     self._setup_style()  # Re-apply ttk styles
                     self.root.update_idletasks()
                 else:
-                    print(f"Warning: Unknown sv-ttk theme '{theme_name}'")
+                    print(f"Warning: Unknown sv-ttk theme '{theme}'")
             except Exception as e:
-                messagebox.showwarning("主题错误", f"切换sv-ttk主题'{theme_name}'失败: {e}", parent=self.root)
+                messagebox.showwarning("主题错误", f"切换sv-ttk主题'{theme}'失败: {e}", parent=self.root)
         else:
             print("No theme engine available to switch theme.")
+
+        # 切换主题后立即应用到所有UI元素
+        self._apply_theme()
+        self._ensure_listbox_styling()  # 确保列表控件样式立即更新
+
+        # 美化所有存在的弹出窗口
+        for window in self.root.winfo_children():
+            if isinstance(window, (tk.Toplevel, ctk.CTkToplevel)):
+                for widget in window.winfo_children():
+                    self._enhance_listboxes_recursively(widget)
 
     def on_refresh(self):
         """Refresh data from filesystem."""
@@ -2427,7 +2534,6 @@ class NovelManagerGUI:
             import traceback;
             traceback.print_exc()
 
-    # --- >> Updated _create_left_pane with Delete Button << ---
     def _create_left_pane(self, parent):
         """创建分类列表面板"""
         if HAS_CTK:
@@ -2438,37 +2544,71 @@ class NovelManagerGUI:
             top_button_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
 
             # 主题切换按钮
-            theme_button = ctk.CTkButton(top_button_frame, text="主题", width=60,
-                                         font=("Microsoft YaHei UI", 15),
-                                         command=self._show_theme_dialog)
+            mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
+            colors = self.soft_colors[mode]
+
+            theme_button = ctk.CTkButton(
+                top_button_frame,
+                text="主题",
+                width=60,
+                font=("Microsoft YaHei UI", 15),
+                command=self._show_theme_dialog,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            )
             theme_button.pack(side=tk.LEFT, padx=(0, 5))
 
             # 添加字体按钮
-            font_button = ctk.CTkButton(top_button_frame, text="字体", width=60,
-                                        font=(self.current_font, 15),
-                                        command=self.show_font_dialog)
+            font_button = ctk.CTkButton(
+                top_button_frame,
+                text="字体",
+                width=60,
+                font=(self.current_font, 15),
+                command=self.show_font_dialog,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            )
             font_button.pack(side=tk.LEFT, padx=(0, 5))
 
             # 回收站按钮
-            trash_button = ctk.CTkButton(top_button_frame, text="回收站", width=70,
-                                         font=("Microsoft YaHei UI", 15),
-                                         command=self.on_view_trash)
+            trash_button = ctk.CTkButton(
+                top_button_frame,
+                text="回收站",
+                width=70,
+                font=("Microsoft YaHei UI", 15),
+                command=self.on_view_trash,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            )
             trash_button.pack(side=tk.LEFT, padx=(0, 5))
 
-            # 清空回收站按钮 - 使用不同颜色区分危险操作
-            empty_trash_color = ("#FFD0D0", "#8B0000")  # 浅红/深红
-            empty_trash_hover = ("#FFBBBB", "#A52A2A")  # 更亮的红/棕红
-            empty_trash = ctk.CTkButton(top_button_frame, text="清空回收站", width=90,
-                                        font=("Microsoft YaHei UI", 15),
-                                        fg_color=empty_trash_color,
-                                        hover_color=empty_trash_hover,
-                                        command=self.on_empty_trash)
+            # 清空回收站按钮 - 使用柔和红色
+            empty_trash = ctk.CTkButton(
+                top_button_frame,
+                text="清空回收站",
+                width=90,
+                font=("Microsoft YaHei UI", 15),
+                fg_color=colors["button_red"],
+                hover_color=colors["button_red_hover"],
+                text_color=colors["list_select_fg"],
+                command=self.on_empty_trash
+            )
             empty_trash.pack(side=tk.LEFT)
 
-            # 退出按钮
-            exit_button = ctk.CTkButton(top_button_frame, text="退出", width=50,
-                                        font=("Microsoft YaHei UI", 15),
-                                        command=self.root.quit)
+            # 退出按钮 - 使用柔和红色
+            exit_button = ctk.CTkButton(
+                top_button_frame,
+                text="退出",
+                width=50,
+                font=("Microsoft YaHei UI", 15),
+                fg_color=colors["button_red"],
+                hover_color=colors["button_red_hover"],
+                text_color=colors["list_select_fg"],
+                command=self.root.quit
+            )
             exit_button.pack(side=tk.RIGHT)
 
             ctk.CTkLabel(frame, text="分类列表", font=("Microsoft YaHei UI", 16, "bold")).pack(pady=(10, 10), padx=10,
@@ -2487,25 +2627,39 @@ class NovelManagerGUI:
             self.category_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
             self.category_listbox.bind("<<ListboxSelect>>", self.on_category_select)
-            # --- >> Ensure Button-3 binding is correct << ---
             self.category_listbox.bind("<Button-3>", self.show_category_menu)  # Bind right-click
 
             cat_button_frame = ctk.CTkFrame(frame, fg_color="transparent")
             cat_button_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
 
-            ctk.CTkButton(cat_button_frame, text="新建分类", width=90, command=self.on_new_category,
-                          font=("Microsoft YaHei UI", 15)).pack(side=tk.LEFT, padx=(0, 5))
+            ctk.CTkButton(
+                cat_button_frame,
+                text="新建分类",
+                width=90,
+                command=self.on_new_category,
+                font=("Microsoft YaHei UI", 15),
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            ).pack(side=tk.LEFT, padx=(0, 5))
 
             # --- >> Added Delete Category Button << ---
             # Use a distinct color for delete button if possible
-            delete_button_color = ("#F08080", "#8B0000")  # Light red / Dark red (adjust as needed)
-            delete_hover_color = ("#DC143C", "#B22222")  # Crimson / Firebrick
             ctk.CTkButton(cat_button_frame, text="删除分类", width=90, command=self.on_delete_selected_category,
-                          font=("Microsoft YaHei UI", 15), fg_color=delete_button_color, hover_color=delete_hover_color
-                          ).pack(side=tk.LEFT, padx=(5, 5))
+                          font=("Microsoft YaHei UI", 15), fg_color=colors["button_red"],
+                          hover_color=colors["button_red_hover"],
+                          text_color=colors["list_select_fg"]).pack(side=tk.LEFT, padx=(5, 5))
 
-            ctk.CTkButton(cat_button_frame, text="刷新", width=60, command=self.on_refresh,
-                          font=("Microsoft YaHei UI", 15)).pack(side=tk.RIGHT, padx=(5, 0))
+            ctk.CTkButton(
+                cat_button_frame,
+                text="刷新",
+                width=60,
+                command=self.on_refresh,
+                font=("Microsoft YaHei UI", 15),
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            ).pack(side=tk.RIGHT, padx=(5, 0))
 
             return frame
 
@@ -2566,11 +2720,22 @@ class NovelManagerGUI:
             search_entry.bind("<Return>", self.on_search)
             search_entry.bind("<Escape>", self.on_clear_search)  # 绑定 Escape 键清除搜索
 
-            # 将"搜索"按钮文字改为"查找"
+            # 获取当前主题的柔和颜色
+            mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
+            colors = self.soft_colors[mode]
+
+            # 将"搜索"按钮文字改为"查找"，并应用柔和颜色
             ctk.CTkButton(search_frame, text="查找", width=60, height=30, command=self.on_search,
-                          font=("Microsoft YaHei UI", 15)).pack(side=tk.LEFT, padx=(0, 5))
+                          font=("Microsoft YaHei UI", 15),
+                          fg_color=colors["button_blue"],
+                          hover_color=colors["button_blue_hover"],
+                          text_color=colors["list_select_fg"]).pack(side=tk.LEFT, padx=(0, 5))
+
             ctk.CTkButton(search_frame, text="清除", width=60, height=30, command=self.on_clear_search,
-                          font=("Microsoft YaHei UI", 15)).pack(side=tk.LEFT)
+                          font=("Microsoft YaHei UI", 15),
+                          fg_color=colors["button_blue"],
+                          hover_color=colors["button_blue_hover"],
+                          text_color=colors["list_select_fg"]).pack(side=tk.LEFT)
 
             # --- 列表标签 ---
             self.entry_list_label = ctk.CTkLabel(frame, text="条目列表", font=("Microsoft YaHei UI", 16, "bold"))
@@ -2580,10 +2745,15 @@ class NovelManagerGUI:
             list_frame = ctk.CTkFrame(frame, fg_color="transparent")
             list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
 
-            # 使用标准 tk.Listbox
-            self.entry_listbox = tk.Listbox(list_frame, exportselection=False, selectmode=tk.EXTENDED,
-                                            relief=tk.FLAT, borderwidth=0, font=("Microsoft YaHei UI", 15),
-                                            activestyle='none')
+            # 使用标准 tk.Listbox 但优化样式
+            self.entry_listbox = tk.Listbox(
+                list_frame,
+                exportselection=False,
+                relief=tk.FLAT,
+                borderwidth=0,
+                font=("Microsoft YaHei UI", 15),
+                activestyle='none'  # 去除选中虚线
+            )
 
             entry_scrollbar = ctk.CTkScrollbar(list_frame, command=self.entry_listbox.yview)
             self.entry_listbox.config(yscrollcommand=entry_scrollbar.set)
@@ -2591,61 +2761,78 @@ class NovelManagerGUI:
             entry_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.entry_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-            # 绑定事件
             self.entry_listbox.bind("<<ListboxSelect>>", self.on_entry_select)
-            self.entry_listbox.bind("<Double-Button-1>", self.on_edit_selected_entry)
+            self.entry_listbox.bind("<Double-1>", self.on_edit_selected_entry)
             self.entry_listbox.bind("<Button-3>", self.show_entry_menu)  # 右键菜单
 
-            # --- 条目按钮框架 ---
-            entry_buttons_frame = ctk.CTkFrame(frame, fg_color="transparent")
-            entry_buttons_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
+            # --- 按钮框架 ---
+            button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            button_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
 
-            ctk.CTkButton(entry_buttons_frame, text="新建条目", width=90, command=self.on_new_entry,
-                          font=("Microsoft YaHei UI", 15)).pack(side=tk.LEFT, padx=(0, 5))
-            ctk.CTkButton(entry_buttons_frame, text="删除选中", width=90, command=self.on_delete_selected_entries,
-                          font=("Microsoft YaHei UI", 15)).pack(side=tk.LEFT, padx=(0, 5))
-            ctk.CTkButton(entry_buttons_frame, text="移动选中", width=90, command=self.on_move_selected_entries,
-                          font=("Microsoft YaHei UI", 15)).pack(side=tk.LEFT)
+            ctk.CTkButton(
+                button_frame,
+                text="新建",
+                width=60,
+                command=self.on_new_entry,
+                font=("Microsoft YaHei UI", 15),
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            ).pack(side=tk.LEFT, padx=(0, 5))
+
+            ctk.CTkButton(
+                button_frame,
+                text="重命名",
+                width=70,
+                command=self.on_rename_entry,
+                font=("Microsoft YaHei UI", 15),
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            ).pack(side=tk.LEFT, padx=(0, 5))
+
+            # 使用柔和红色
+            ctk.CTkButton(
+                button_frame,
+                text="删除",
+                width=60,
+                font=("Microsoft YaHei UI", 15),
+                fg_color=colors["button_red"],
+                hover_color=colors["button_red_hover"],
+                text_color=colors["list_select_fg"],
+                command=self.on_delete_selected_entries
+            ).pack(side=tk.LEFT)
 
             return frame
-
-        else:  # 回退到 ttk
+        else:
+            # ttk回退代码保持不变
             frame = ttk.Frame(parent, padding=5)
             search_frame = ttk.Frame(frame)
-            search_frame.pack(fill=tk.X, pady=(0, 10))
-            # ttk 的搜索标签保持原样
+            search_frame.pack(fill=tk.X, pady=(0, 5))
             ttk.Label(search_frame, text="搜索:").pack(side=tk.LEFT, padx=(0, 5))
             self.search_var = tk.StringVar()
-            search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
-            search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-            search_entry.bind("<Return>", self.on_search)
-            search_entry.bind("<Escape>", self.on_clear_search)
-            # ttk 的按钮保持"搜索"
-            ttk.Button(search_frame, text="搜索", command=self.on_search).pack(side=tk.LEFT, padx=(0, 5))
-            ttk.Button(search_frame, text="清除", command=self.on_clear_search).pack(side=tk.LEFT)
-
-            self.entry_list_label = ttk.Label(frame, text="条目列表", font=("Segoe UI", 11, "bold"))
+            ttk.Entry(search_frame, textvariable=self.search_var).pack(side=tk.LEFT, fill=tk.X, expand=True,
+                                                                       padx=(0, 5))
+            ttk.Button(search_frame, text="查找", width=6, command=self.on_search).pack(side=tk.LEFT, padx=(0, 5))
+            ttk.Button(search_frame, text="清除", width=6, command=self.on_clear_search).pack(side=tk.LEFT)
+            self.entry_list_label = ttk.Label(frame, text="条目列表", font=("", 11, "bold"))
             self.entry_list_label.pack(pady=(0, 5), anchor=tk.W)
-
             list_frame = ttk.Frame(frame)
             list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
             entry_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL)
             self.entry_listbox = tk.Listbox(list_frame, yscrollcommand=entry_scrollbar.set, exportselection=False,
-                                            selectmode=tk.EXTENDED, borderwidth=1, relief=tk.FLAT)
+                                            borderwidth=1, relief=tk.FLAT)
             entry_scrollbar.config(command=self.entry_listbox.yview)
             entry_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.entry_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             self.entry_listbox.bind("<<ListboxSelect>>", self.on_entry_select)
-            self.entry_listbox.bind("<Double-Button-1>", self.on_edit_selected_entry)
+            self.entry_listbox.bind("<Double-1>", self.on_edit_selected_entry)
             self.entry_listbox.bind("<Button-3>", self.show_entry_menu)
-
-            entry_buttons_frame = ttk.Frame(frame)
-            entry_buttons_frame.pack(fill=tk.X, pady=(5, 0))
-            ttk.Button(entry_buttons_frame, text="新建条目", command=self.on_new_entry).pack(side=tk.LEFT, padx=(0, 5))
-            ttk.Button(entry_buttons_frame, text="删除选中", command=self.on_delete_selected_entries).pack(side=tk.LEFT,
-                                                                                                           padx=(0, 5))
-            ttk.Button(entry_buttons_frame, text="移动选中", command=self.on_move_selected_entries).pack(side=tk.LEFT)
-
+            button_frame = ttk.Frame(frame)
+            button_frame.pack(fill=tk.X, pady=(5, 0))
+            ttk.Button(button_frame, text="新建", command=self.on_new_entry).pack(side=tk.LEFT, padx=(0, 5))
+            ttk.Button(button_frame, text="重命名", command=self.on_rename_entry).pack(side=tk.LEFT, padx=(0, 5))
+            ttk.Button(button_frame, text="删除", command=self.on_delete_selected_entries).pack(side=tk.LEFT)
             return frame
 
     def _create_right_pane(self, parent):
@@ -2669,7 +2856,7 @@ class NovelManagerGUI:
 
             # 标签输入行
             tags_frame = ctk.CTkFrame(editor_top_frame, fg_color="transparent")
-            tags_frame.pack(fill=tk.X, pady=(0, 8))  # 增加下方间距
+            tags_frame.pack(fill=tk.X, pady=(0, 8))
             ctk.CTkLabel(tags_frame, text="标签:", width=50, font=("Microsoft YaHei UI", 15)).pack(side=tk.LEFT,
                                                                                                    padx=(0, 8))
             self.tags_var = tk.StringVar()
@@ -2689,13 +2876,14 @@ class NovelManagerGUI:
             content_frame = ctk.CTkFrame(frame, fg_color="transparent")
             content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(5, 5))
 
-            # 使用 CTkTextbox 作为内容编辑器
+            # 使用 CTkTextbox 作为内容编辑器，设置为深色背景
             self.content_text = ctk.CTkTextbox(
                 content_frame,
                 wrap="word",  # 自动换行
                 font=("Microsoft YaHei UI", 13),  # 稍大字体
                 border_width=1,  # 设置边框宽度
-                # fg_color 和 border_color 由主题自动处理
+                fg_color="#2b2b2b",  # 与分类和条目列表一致的深灰色背景
+                text_color="white",  # 白色文字以提高可读性
             )
             self.content_text.pack(fill=tk.BOTH, expand=True)
 
@@ -2703,9 +2891,21 @@ class NovelManagerGUI:
             save_frame = ctk.CTkFrame(frame, fg_color="transparent")
             save_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
 
-            # 保存按钮，调整大小和字体
-            ctk.CTkButton(save_frame, text="保存", command=self.on_save,
-                          font=("Microsoft YaHei UI", 14, "bold"), height=40).pack(fill=tk.X)
+            # 获取当前主题的柔和颜色
+            mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
+            colors = self.soft_colors[mode]
+
+            # 保存按钮，使用柔和绿色
+            ctk.CTkButton(
+                save_frame,
+                text="保存",
+                command=self.on_save,
+                font=("Microsoft YaHei UI", 14, "bold"),
+                height=40,
+                fg_color=colors["button_green"],
+                hover_color=colors["button_green_hover"],
+                text_color=colors["list_select_fg"]
+            ).pack(fill=tk.X)
 
             return frame
 
@@ -2757,6 +2957,10 @@ class NovelManagerGUI:
             theme_dialog.transient(self.root)
             theme_dialog.grab_set()
 
+            # 获取当前主题颜色
+            mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
+            colors = self.soft_colors[mode]
+
             ctk.CTkLabel(theme_dialog, text="选择界面主题",
                          font=("Microsoft YaHei UI", 16, "bold")).pack(pady=(20, 25))
 
@@ -2765,19 +2969,27 @@ class NovelManagerGUI:
 
             ctk.CTkButton(button_frame, text="亮色", width=80, height=35,
                           font=("Microsoft YaHei UI", 15),
+                          fg_color=colors["button_blue"],
+                          hover_color=colors["button_blue_hover"],
+                          text_color=colors["list_select_fg"],
                           command=lambda: [self.switch_theme("light"), theme_dialog.destroy()]
                           ).pack(side=tk.LEFT, padx=(0, 10))
 
             ctk.CTkButton(button_frame, text="暗色", width=80, height=35,
                           font=("Microsoft YaHei UI", 15),
+                          fg_color=colors["button_blue"],
+                          hover_color=colors["button_blue_hover"],
+                          text_color=colors["list_select_fg"],
                           command=lambda: [self.switch_theme("dark"), theme_dialog.destroy()]
                           ).pack(side=tk.LEFT, padx=(0, 10))
 
             ctk.CTkButton(button_frame, text="跟随系统", width=100, height=35,
                           font=("Microsoft YaHei UI", 15),
+                          fg_color=colors["button_blue"],
+                          hover_color=colors["button_blue_hover"],
+                          text_color=colors["list_select_fg"],
                           command=lambda: [self.switch_theme("system"), theme_dialog.destroy()]
                           ).pack(side=tk.LEFT)
-
         elif HAS_SVTTK:
             theme_dialog = Toplevel(self.root)
             theme_dialog.title("选择主题")
@@ -2941,7 +3153,7 @@ class NovelManagerGUI:
 
         return updated_count
 
-    # 添加字体选择对话框
+    # --- 修复字体选择对话框按钮颜色 ---
     def show_font_dialog(self):
         """显示字体选择对话框"""
         if HAS_CTK:
@@ -2955,6 +3167,10 @@ class NovelManagerGUI:
             font_dialog.geometry("550x600")  # 增大高度以容纳更多控件
             font_dialog.transient(self.root)
             font_dialog.grab_set()
+
+            # 获取当前主题的柔和颜色
+            mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
+            colors = self.soft_colors[mode]
 
             # 上部分 - 字体选择
             top_frame = ctk.CTkFrame(font_dialog)
@@ -3009,12 +3225,15 @@ class NovelManagerGUI:
             )
             folder_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
 
-            # 打开/管理文件夹按钮
+            # 打开/管理文件夹按钮 - 应用柔和颜色
             open_folder_btn = ctk.CTkButton(
                 folder_frame,
                 text="打开文件夹",
                 font=(DIALOG_FONT, DIALOG_FONT_SIZE),
                 width=120,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"],
                 command=lambda: self._open_font_folder(folder_path_var)
             )
             open_folder_btn.pack(side=tk.LEFT)
@@ -3023,12 +3242,29 @@ class NovelManagerGUI:
             list_frame = ctk.CTkFrame(top_frame)
             list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
-            # 使用标准Listbox
+            # 使用标准Listbox但自定义样式
             self.font_listbox = tk.Listbox(
                 list_frame,
                 font=(DIALOG_FONT, DIALOG_FONT_SIZE),
-                exportselection=False
+                exportselection=False,
+                relief=tk.FLAT,
+                borderwidth=1,
+                bd=10  # 加内边距，但不改变数据
             )
+
+            # 设置深色背景和选择颜色
+            select_bg = "#464646"  # 深灰色背景
+            select_fg = "white"
+            list_bg = "#3a3a3a"  # 改为稍浅的灰色背景，使白色文字更易读
+
+            self.font_listbox.config(
+                selectbackground=select_bg,
+                selectforeground=select_fg,
+                bg=list_bg,
+                fg="#e0e0e0",  # 使用更亮的灰白色文字，提高可读性
+                bd=10  # 添加内边距
+            )
+
             scrollbar = ctk.CTkScrollbar(list_frame, command=self.font_listbox.yview)
             self.font_listbox.config(yscrollcommand=scrollbar.set)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -3069,7 +3305,7 @@ class NovelManagerGUI:
                 font=(self.current_font, self.font_size),
                 height=50,
                 corner_radius=6,
-                fg_color=("light gray", "gray30")  # 根据模式给予不同背景色
+                fg_color=("#E0E0E0", "#404040")  # 确保在暗模式下有足够对比度
             )
             preview_text.pack(fill=tk.X, padx=10, pady=(0, 10))
 
@@ -3139,14 +3375,16 @@ class NovelManagerGUI:
                     except Exception as e:
                         messagebox.showerror("应用错误", f"应用字体设置时出错: {e}", parent=font_dialog)
 
-            # 使用更明显的按钮样式
+            # 使用更明显的按钮样式，应用柔和颜色
             apply_button = ctk.CTkButton(
                 button_frame,
                 text="应用字体",
                 command=apply_font,
                 height=40,  # 增加按钮高度
                 font=(DIALOG_FONT, DIALOG_FONT_SIZE, "bold"),  # 固定字体
-                fg_color=("#3B8ED0", "#1F6AA5")  # 更明显的蓝色
+                fg_color=colors["button_green"],
+                hover_color=colors["button_green_hover"],
+                text_color=colors["list_select_fg"]
             )
             apply_button.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
 
@@ -3155,7 +3393,10 @@ class NovelManagerGUI:
                 text="取消",
                 command=font_dialog.destroy,
                 height=40,
-                font=(DIALOG_FONT, DIALOG_FONT_SIZE)
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE),
+                fg_color=colors["button_red"],
+                hover_color=colors["button_red_hover"],
+                text_color=colors["list_select_fg"]
             )
             cancel_button.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -3332,6 +3573,64 @@ class NovelManagerGUI:
         # 退出程序
         self.root.quit()
 
+    # --- 在 NovelManagerGUI 类中添加新方法 ---
+    def _customize_listbox_display(self):
+        """自定义列表框显示效果，增强美观度"""
+        pass  # 不再执行任何操作，以免破坏功能
+
+    # 添加新方法进行UI增强
+    def _apply_ui_enhancements(self):
+        """应用全局UI增强效果"""
+        if HAS_CTK:
+            # 设置自定义颜色变量和圆角
+            ctk.set_default_color_theme("blue")  # 或创建自定义主题
+
+            # 立即美化所有标准Listbox的视觉效果
+            for widget in self.root.winfo_children():
+                self._enhance_listboxes_recursively(widget)
+
+            # 确保应用后立即可见
+            self.root.update_idletasks()
+
+    def _enhance_listboxes_recursively(self, parent):
+        """递归增强所有Listbox控件的视觉效果"""
+        for widget in parent.winfo_children():
+            if isinstance(widget, tk.Listbox):
+                self._beautify_listbox(widget)
+            elif hasattr(widget, 'winfo_children'):
+                self._enhance_listboxes_recursively(widget)
+
+    def _beautify_listbox(self, listbox):
+        """美化单个Listbox控件的视觉效果"""
+        try:
+            # 无论亮暗模式，始终使用深灰色背景和固定的选中颜色
+            bg_color = "#2b2b2b"  # 深灰色背景
+            select_bg = "#3f4e5d"  # 稍亮的蓝灰色作为选中背景
+            select_fg = "white"  # 白色文字作为选中文本颜色
+
+            # 应用统一的颜色样式
+            listbox.config(
+                selectbackground=select_bg,
+                selectforeground=select_fg,
+                bg=bg_color,
+                fg="white",  # 设置文本颜色为白色以匹配深色背景
+                bd=10,  # 内边距值保持不变
+                relief=tk.FLAT
+            )
+
+            # 立即应用变更
+            listbox.update_idletasks()
+        except Exception as e:
+            print(f"美化Listbox时出错: {e}")
+
+    # 添加新方法确保列表样式立即应用
+    def _ensure_listbox_styling(self):
+        """确保列表框样式在启动时立即应用"""
+        if hasattr(self, 'category_listbox') and self.category_listbox.winfo_exists():
+            self._beautify_listbox(self.category_listbox)
+        if hasattr(self, 'entry_listbox') and self.entry_listbox.winfo_exists():
+            self._beautify_listbox(self.entry_listbox)
+
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -3357,7 +3656,7 @@ if __name__ == "__main__":
             root.destroy()
         exit()
 
-    app = NovelManagerGUI(root)  # 将根窗口传递给 GUI 类
+    app = NovelManagerGUI(root, manager)  # 将根窗口传递给 GUI 类
 
     # 添加窗口关闭事件处理
     root.protocol("WM_DELETE_WINDOW", app.on_close)
