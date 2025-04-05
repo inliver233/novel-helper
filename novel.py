@@ -10,6 +10,11 @@ from tkinter import ttk, scrolledtext, messagebox, simpledialog, Menu, Toplevel,
 from pathlib import Path
 import shutil  # For moving directories and emptying trash
 import uuid  # Potentially for more robust unique naming
+import glob
+import tkinter.font as tkFont
+import configparser  # 用于保存配置
+import platform  # 获取操作系统信息
+import subprocess  # For opening folders on macOS and Linux
 
 # Import the theme library - place this early
 try:
@@ -31,6 +36,195 @@ except ImportError:
     print("Warning: CustomTkinter库未找到。将使用默认Tkinter主题，建议安装：pip install customtkinter")
     HAS_CTK = False
     HAS_CTK_PANED = False
+
+
+# --- 添加字体管理类 ---
+class FontManager:
+    def __init__(self):
+        """初始化字体管理器"""
+        self.system_fonts = []
+        self.custom_fonts = []
+        self.current_font = "Microsoft YaHei UI"  # 默认字体
+        self.font_size = 15  # 默认字体大小
+        self.config_path = Path("settings.ini")  # 配置文件路径
+        self.use_custom_fonts = False  # 是否使用自定义字体而非系统字体
+        self.custom_fonts_dir = Path("font")  # 自定义字体文件夹路径
+        self.load_system_fonts()
+        self.load_settings()  # 加载保存的设置
+
+        # 确保字体文件夹存在
+        if not self.custom_fonts_dir.exists():
+            try:
+                self.custom_fonts_dir.mkdir(exist_ok=True)
+                print(f"已创建字体文件夹: {self.custom_fonts_dir}")
+            except Exception as e:
+                print(f"创建字体文件夹失败: {e}")
+
+    def load_system_fonts(self):
+        """加载系统字体"""
+        try:
+            # 使用tkinter获取系统字体
+            font_families = list(tkFont.families())
+            # 过滤掉一些特殊字体
+            self.system_fonts = [f for f in font_families if not f.startswith('@') and f != 'MS Gothic']
+            self.system_fonts.sort()
+        except Exception as e:
+            print(f"加载系统字体时出错: {e}")
+            self.system_fonts = ["Microsoft YaHei UI", "SimSun", "Arial", "Times New Roman"]
+
+    def load_custom_fonts_from_directory(self, directory_path):
+        """从指定目录加载自定义字体文件"""
+        self.custom_fonts = []
+        try:
+            font_path = Path(directory_path)
+            if not font_path.exists() or not font_path.is_dir():
+                return False
+
+            # 支持的字体文件扩展名
+            font_extensions = ['.ttf', '.otf', '.ttc', '.fon']
+
+            # 遍历目录查找字体文件
+            for ext in font_extensions:
+                for font_file in font_path.glob(f'*{ext}'):
+                    # 仅添加文件名（不含扩展名）作为字体名称
+                    self.custom_fonts.append({
+                        "name": font_file.stem,
+                        "path": str(font_file)
+                    })
+
+            return len(self.custom_fonts) > 0
+        except Exception as e:
+            print(f"从目录加载字体时出错: {e}")
+            return False
+
+    def register_custom_font(self, font_path):
+        """注册自定义字体(平台限制)"""
+        try:
+            font_path_obj = Path(font_path)
+            if not font_path_obj.exists() or not font_path_obj.is_file():
+                return False
+
+            # Windows平台尝试注册字体
+            system = platform.system()
+            if system == 'Windows':
+                # 使用Windows API尝试临时加载字体
+                import ctypes
+                from ctypes import wintypes
+
+                # Windows API常量
+                HWND_BROADCAST = 0xFFFF
+                WM_FONTCHANGE = 0x001D
+                FR_PRIVATE = 0x10
+
+                gdi32 = ctypes.WinDLL('gdi32')
+                user32 = ctypes.WinDLL('user32')
+
+                # AddFontResourceEx函数
+                add_font_resource_ex = gdi32.AddFontResourceExW
+                add_font_resource_ex.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.PVOID]
+                add_font_resource_ex.restype = wintypes.INT
+
+                # 尝试加载字体
+                font_path_str = str(font_path_obj)
+                result = add_font_resource_ex(font_path_str, FR_PRIVATE, 0)
+
+                # 通知应用字体变化
+                if result > 0:
+                    user32.SendMessageW(HWND_BROADCAST, WM_FONTCHANGE, 0, 0)
+                    return True
+
+            return False
+        except Exception as e:
+            print(f"注册自定义字体时出错: {e}")
+            return False
+
+    def get_all_fonts(self):
+        """获取所有可用字体（系统或自定义，取决于设置）"""
+        # 根据设置返回不同的字体集
+        if self.use_custom_fonts:
+            # 只返回自定义字体
+            fonts = [f["name"] for f in self.custom_fonts]
+            # 如果自定义字体为空，提供提示信息
+            if not fonts:
+                return ["<文件夹中无字体文件>"]
+            return fonts
+        else:
+            # 只返回系统字体
+            return self.system_fonts
+
+    def load_settings(self):
+        """从配置文件加载字体设置"""
+        try:
+            if self.config_path.exists():
+                config = configparser.ConfigParser()
+                config.read(self.config_path, encoding='utf-8')
+
+                if 'Fonts' in config:
+                    if 'current_font' in config['Fonts']:
+                        saved_font = config['Fonts']['current_font']
+                        # 确保字体存在于系统中
+                        if saved_font in self.system_fonts or any(f['name'] == saved_font for f in self.custom_fonts):
+                            self.current_font = saved_font
+
+                    if 'font_size' in config['Fonts']:
+                        try:
+                            self.font_size = int(config['Fonts']['font_size'])
+                        except ValueError:
+                            pass  # 使用默认值
+
+                    if 'use_custom_fonts' in config['Fonts']:
+                        self.use_custom_fonts = config['Fonts'].getboolean('use_custom_fonts')
+
+                if 'CustomFonts' in config:
+                    # 加载上次使用的自定义字体文件夹
+                    if 'last_folder' in config['CustomFonts']:
+                        last_folder = config['CustomFonts']['last_folder']
+                        custom_folder_path = Path(last_folder)
+                        if custom_folder_path.exists():
+                            self.custom_fonts_dir = custom_folder_path
+                            if self.use_custom_fonts:
+                                self.load_custom_fonts_from_directory(last_folder)
+                        else:
+                            # 如果之前的文件夹不存在，使用默认font文件夹
+                            self.custom_fonts_dir = Path("font")
+        except Exception as e:
+            print(f"加载字体设置时出错: {e}")
+
+    def save_settings(self, custom_fonts_folder=None):
+        """保存字体设置到配置文件"""
+        try:
+            config = configparser.ConfigParser()
+
+            # 尝试读取现有配置
+            if self.config_path.exists():
+                config.read(self.config_path, encoding='utf-8')
+
+            # 确保Fonts节存在
+            if 'Fonts' not in config:
+                config['Fonts'] = {}
+
+            config['Fonts']['current_font'] = self.current_font
+            config['Fonts']['font_size'] = str(self.font_size)
+            config['Fonts']['use_custom_fonts'] = str(self.use_custom_fonts)
+
+            # 保存自定义字体文件夹
+            if 'CustomFonts' not in config:
+                config['CustomFonts'] = {}
+
+            # 如果提供了新的文件夹路径，则使用它，否则使用当前路径
+            if custom_fonts_folder:
+                config['CustomFonts']['last_folder'] = custom_fonts_folder
+            else:
+                config['CustomFonts']['last_folder'] = str(self.custom_fonts_dir)
+
+            # 写入配置文件
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                config.write(f)
+
+            return True
+        except Exception as e:
+            print(f"保存字体设置时出错: {e}")
+            return False
 
 
 # --- Custom Dialog for Moving Entries ---
@@ -833,6 +1027,9 @@ class NovelManagerGUI:
         self.root.geometry("1300x850")
 
         self.manager = NovelManager()
+        self.font_manager = FontManager()  # 创建字体管理器实例
+        self.current_font = self.font_manager.current_font  # 当前字体
+        self.font_size = 15  # 默认字体大小
 
         # --- Theme and Color Setup ---
         self.current_theme_mode = "system"
@@ -970,45 +1167,37 @@ class NovelManagerGUI:
 
     # --- >> Function to apply colors to tk.Menu << ---
     def _apply_menu_colors(self):
-        """应用颜色到仅用于右键菜单的 Menu 实例"""
+        """应用当前主题颜色到菜单"""
         if not HAS_CTK:
-            return
+            return  # 非CTk模式无需特殊处理
 
         try:
-            current_mode = self.current_theme_mode
+            # 获取当前主题和模式
+            current_mode = ctk.get_appearance_mode().lower()
             mode_index = 0 if current_mode == 'light' else 1
 
-            # 获取 CTk 主题颜色
-            bg_color = ctk.ThemeManager.theme["CTkFrame"]["fg_color"][mode_index]
-            fg_color = ctk.ThemeManager.theme["CTkLabel"]["text_color"][mode_index]
-            active_bg = ctk.ThemeManager.theme["CTkButton"]["hover_color"][mode_index]
-            active_fg = ctk.ThemeManager.theme["CTkButton"]["text_color"][mode_index]
-            disabled_fg = ctk.ThemeManager.theme["CTkLabel"]["text_color_disabled"][mode_index]
+            # 获取各种颜色
+            fg_color = ctk.ThemeManager.theme["CTkFrame"]["fg_color"][mode_index]
+            text_color = ctk.ThemeManager.theme["CTkLabel"]["text_color"][mode_index]
+            hover_color = ctk.ThemeManager.theme["CTkButton"]["hover_color"][mode_index]
 
-            # 只处理右键菜单（删除了菜单栏相关菜单）
-            context_menus = []
-            if hasattr(self, 'category_menu') and isinstance(self.category_menu, Menu):
-                context_menus.append(self.category_menu)
-            if hasattr(self, 'entry_menu') and isinstance(self.entry_menu, Menu):
-                context_menus.append(self.entry_menu)
-
-            for menu in context_menus:
-                if menu and menu.winfo_exists():
+            # 应用到所有菜单
+            for menu_name in ('category_menu', 'entry_menu'):
+                menu = getattr(self, menu_name, None)
+                if menu:
                     try:
-                        menu.config(
-                            background=bg_color,
-                            foreground=fg_color,
-                            activebackground=active_bg,
-                            activeforeground=active_fg,
-                            disabledforeground=disabled_fg,
-                            relief=tk.FLAT,
-                            bd=0
+                        menu.configure(
+                            bg=fg_color,
+                            fg=text_color,
+                            activebackground=hover_color,
+                            activeforeground=text_color,
+                            # 移除可能导致问题的配置项
+                            # disabledforeground=text_color_disabled
                         )
-                    except tk.TclError as conf_e:
-                        print(f"Warning: TclError configuring menu widget: {conf_e}")
-
+                    except tk.TclError as e:
+                        print(f"菜单 {menu_name} 颜色应用错误: {e}")
         except Exception as e:
-            print(f"Warning: Failed to apply menu colors: {e}")
+            print(f"应用菜单颜色时出错: {e}")
 
     def _create_ui(self):
         """Create the main UI layout using PanedWindow."""
@@ -1934,7 +2123,8 @@ class NovelManagerGUI:
         try:
             trash_items_paths = self.manager.list_trash()
         except Exception as e:
-            messagebox.showerror("错误", f"无法列出回收站内容:\n{e}", parent=self.root); return
+            messagebox.showerror("错误", f"无法列出回收站内容:\n{e}", parent=self.root);
+            return
 
         dialog = TrashDialog(self.root, trash_items_paths)  # Uses Toplevel/ttk
         items_to_process = dialog.selected_items
@@ -2006,7 +2196,8 @@ class NovelManagerGUI:
             count = len(self.manager.list_trash())
             if count == 0: messagebox.showinfo("回收站为空", "回收站中无项目。", parent=self.root); return
         except Exception as e:
-            messagebox.showerror("错误", f"无法检查回收站: {e}", parent=self.root); return
+            messagebox.showerror("错误", f"无法检查回收站: {e}", parent=self.root);
+            return
 
         if messagebox.askyesno("确认清空回收站",
                                f"确定要永久删除回收站中的全部 {count} 个项目吗？\n\n**警告：此操作无法撤销！**",
@@ -2129,11 +2320,13 @@ class NovelManagerGUI:
                 try:
                     txt = listbox.get(idx)
                     if txt.startswith("("):
-                        has_placeholder = True; break
+                        has_placeholder = True;
+                        break
                     else:
                         valid_titles.append(txt)
                 except (tk.TclError, IndexError):
-                    has_placeholder = True; break
+                    has_placeholder = True;
+                    break
 
             if not has_placeholder and valid_titles:
                 # Single valid item selected AND it's the one clicked on
@@ -2249,6 +2442,12 @@ class NovelManagerGUI:
                                          font=("Microsoft YaHei UI", 15),
                                          command=self._show_theme_dialog)
             theme_button.pack(side=tk.LEFT, padx=(0, 5))
+
+            # 添加字体按钮
+            font_button = ctk.CTkButton(top_button_frame, text="字体", width=60,
+                                        font=(self.current_font, 15),
+                                        command=self.show_font_dialog)
+            font_button.pack(side=tk.LEFT, padx=(0, 5))
 
             # 回收站按钮
             trash_button = ctk.CTkButton(top_button_frame, text="回收站", width=70,
@@ -2602,6 +2801,537 @@ class NovelManagerGUI:
         else:
             messagebox.showinfo("主题", "当前版本不支持主题切换", parent=self.root)
 
+    # 添加字体设置方法
+    def _apply_font_settings(self):
+        """应用当前字体设置到整个界面"""
+        if not hasattr(self, 'current_font') or not self.current_font:
+            self.current_font = "Microsoft YaHei UI"
+
+        if not hasattr(self, 'font_size') or not self.font_size:
+            self.font_size = 15
+
+        print(f"正在应用字体: {self.current_font}, 大小: {self.font_size}")
+
+        # 更新所有已创建控件的字体
+        updated_count = self._update_widgets_font(self.root)
+        print(f"已更新 {updated_count} 个控件的字体")
+
+        # 不再使用不存在的set_default_font方法
+        if HAS_CTK:
+            try:
+                # 尝试更新CTk默认字体配置(如果存在此方法)
+                if hasattr(ctk, 'set_default_font'):
+                    ctk.set_default_font((self.current_font, self.font_size))
+                else:
+                    # 替代方法：通过ThemeManager修改默认字体(如果支持)
+                    if hasattr(ctk, 'ThemeManager'):
+                        try:
+                            # 这是一个尝试，可能CustomTkinter不支持这种方式
+                            default_font = (self.current_font, self.font_size)
+                            # 更新主题中的默认字体字典
+                            for widget in ["CTkLabel", "CTkButton", "CTkEntry", "CTkOptionMenu"]:
+                                if widget in ctk.ThemeManager.theme:
+                                    if "font" in ctk.ThemeManager.theme[widget]:
+                                        ctk.ThemeManager.theme[widget]["font"] = default_font
+                        except Exception as e:
+                            print(f"尝试更新CTk主题字体失败: {e}")
+            except Exception as e:
+                print(f"设置CTk默认字体失败: {e}")
+        else:
+            # ttk字体更新保持不变
+            try:
+                style = ttk.Style()
+                style.configure("TLabel", font=(self.current_font, self.font_size))
+                style.configure("TButton", font=(self.current_font, self.font_size))
+                style.configure("TEntry", font=(self.current_font, self.font_size))
+                style.configure("TFrame", font=(self.current_font, self.font_size))
+                print("已更新ttk样式字体")
+            except Exception as e:
+                print(f"更新ttk样式时出错: {e}")
+
+        # 强制刷新界面
+        self.root.update_idletasks()
+        print("已强制刷新界面")
+        return updated_count
+
+    def _update_widgets_font(self, parent):
+        """递归更新所有控件的字体"""
+        updated_count = 0
+
+        # 定义不支持字体属性的CTk控件类型列表
+        unsupported_ctk_widgets = [
+            'CTkFrame', 'CTkCanvas', 'CTkScrollbar',
+            'CTkProgressBar', 'CTkTabview', 'CTkSegmentedButton'
+        ]
+
+        # 定义支持字体的CTk控件类型列表(白名单方式更安全)
+        supported_ctk_widgets = [
+            'CTkLabel', 'CTkButton', 'CTkEntry', 'CTkCheckBox',
+            'CTkRadioButton', 'CTkComboBox', 'CTkOptionMenu',
+            'CTkTextbox', 'CTkSwitch'
+        ]
+
+        for child in parent.winfo_children():
+            try:
+                # 检查控件类型
+                widget_class = child.__class__.__name__
+
+                # 处理CTk控件
+                if HAS_CTK and widget_class.startswith('CTk'):
+                    # 跳过已知不支持字体的控件类型
+                    if widget_class in unsupported_ctk_widgets:
+                        pass
+                    # 只处理已知支持字体的控件
+                    elif widget_class in supported_ctk_widgets:
+                        try:
+                            child.configure(font=(self.current_font, self.font_size))
+                            updated_count += 1
+                        except Exception as e:
+                            # 降低日志级别，避免大量输出
+                            if "font" in str(e).lower():
+                                # 这是预期中的"不支持font"错误
+                                pass
+                            else:
+                                # 其他未预期的错误
+                                print(f"更新{widget_class}字体时出错: {e}")
+                    else:
+                        # 对于未知的CTk控件，尝试更新但捕获并忽略错误
+                        try:
+                            child.configure(font=(self.current_font, self.font_size))
+                            updated_count += 1
+                        except:
+                            pass
+                else:
+                    # 标准Tkinter控件处理
+                    try:
+                        # 检查此控件是否有font属性
+                        current_font = child.cget('font')
+                        if current_font:
+                            # 提取字体大小和样式
+                            if isinstance(current_font, str):
+                                # 解析字符串字体描述
+                                parts = current_font.split()
+                                size = self.font_size  # 使用配置的字体大小
+                                weight = "normal"
+                                for part in parts:
+                                    if part in ["bold", "italic"]:
+                                        weight = part
+
+                                # 设置新字体
+                                child.configure(font=(self.current_font, size, weight))
+                                updated_count += 1
+                            elif isinstance(current_font, tuple):
+                                # 已经是元组形式的字体
+                                size = current_font[1] if len(current_font) > 1 else self.font_size
+                                weight = current_font[2] if len(current_font) > 2 else "normal"
+                                child.configure(font=(self.current_font, size, weight))
+                                updated_count += 1
+                    except (tk.TclError, AttributeError):
+                        # 忽略无字体属性的控件
+                        pass
+
+            except Exception as e:
+                # 只记录真正的未知错误
+                print(f"处理控件字体时发生未知错误: {e}")
+
+            # 递归处理子控件
+            if child.winfo_children():
+                sub_updated = self._update_widgets_font(child)
+                updated_count += sub_updated
+
+        return updated_count
+
+    # 添加字体选择对话框
+    def show_font_dialog(self):
+        """显示字体选择对话框"""
+        if HAS_CTK:
+            # 定义固定的对话框字体和大小 - 不受用户选择影响
+            DIALOG_FONT = "Microsoft YaHei UI"
+            DIALOG_FONT_SIZE = 13
+            DIALOG_TITLE_SIZE = 16
+
+            font_dialog = ctk.CTkToplevel(self.root)
+            font_dialog.title("选择字体")
+            font_dialog.geometry("550x600")  # 增大高度以容纳更多控件
+            font_dialog.transient(self.root)
+            font_dialog.grab_set()
+
+            # 上部分 - 字体选择
+            top_frame = ctk.CTkFrame(font_dialog)
+            top_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+
+            ctk.CTkLabel(top_frame, text="选择字体",
+                         font=(DIALOG_FONT, DIALOG_TITLE_SIZE, "bold")).pack(pady=(0, 15))
+
+            # 字体来源选择
+            source_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+            source_frame.pack(fill=tk.X, pady=(0, 15))
+
+            # 字体来源标签
+            ctk.CTkLabel(source_frame, text="字体来源:",
+                         font=(DIALOG_FONT, DIALOG_FONT_SIZE)).pack(side=tk.LEFT, padx=(0, 10))
+
+            # 使用变量跟踪字体来源选择
+            source_var = tk.BooleanVar(value=self.font_manager.use_custom_fonts)
+
+            # 创建单选按钮
+            system_radio = ctk.CTkRadioButton(
+                source_frame,
+                text="系统字体",
+                variable=source_var,
+                value=False,
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE),
+                command=lambda: self._update_font_source(font_dialog, False)
+            )
+            system_radio.pack(side=tk.LEFT, padx=(0, 15))
+
+            custom_radio = ctk.CTkRadioButton(
+                source_frame,
+                text="自定义字体文件夹",
+                variable=source_var,
+                value=True,
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE),
+                command=lambda: self._update_font_source(font_dialog, True)
+            )
+            custom_radio.pack(side=tk.LEFT)
+
+            # 字体文件夹管理按钮
+            folder_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+            folder_frame.pack(fill=tk.X, pady=(0, 15))
+
+            # 显示当前目录路径
+            folder_path_var = tk.StringVar(value=str(self.font_manager.custom_fonts_dir))
+            folder_path = ctk.CTkEntry(
+                folder_frame,
+                textvariable=folder_path_var,
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE),
+                state="readonly"
+            )
+            folder_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+
+            # 打开/管理文件夹按钮
+            open_folder_btn = ctk.CTkButton(
+                folder_frame,
+                text="打开文件夹",
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE),
+                width=120,
+                command=lambda: self._open_font_folder(folder_path_var)
+            )
+            open_folder_btn.pack(side=tk.LEFT)
+
+            # 字体列表框架
+            list_frame = ctk.CTkFrame(top_frame)
+            list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+
+            # 使用标准Listbox
+            self.font_listbox = tk.Listbox(
+                list_frame,
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE),
+                exportselection=False
+            )
+            scrollbar = ctk.CTkScrollbar(list_frame, command=self.font_listbox.yview)
+            self.font_listbox.config(yscrollcommand=scrollbar.set)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            self.font_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            # 填充字体列表
+            self._load_fonts_to_listbox()
+
+            # 字体大小选择
+            size_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+            size_frame.pack(fill=tk.X, pady=(0, 15))
+            ctk.CTkLabel(size_frame, text="字体大小:",
+                         font=(DIALOG_FONT, DIALOG_FONT_SIZE)).pack(side=tk.LEFT, padx=(0, 10))
+
+            size_var = tk.IntVar(value=self.font_size)
+            size_options = [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24]
+
+            size_menu = ctk.CTkOptionMenu(
+                size_frame,
+                values=[str(s) for s in size_options],
+                variable=size_var,
+                dynamic_resizing=False,
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE)
+            )
+            size_menu.set(str(self.font_size))
+            size_menu.pack(side=tk.LEFT)
+
+            # 预览区域
+            preview_frame = ctk.CTkFrame(top_frame)
+            preview_frame.pack(fill=tk.X, pady=(0, 10))
+            ctk.CTkLabel(preview_frame, text="预览:",
+                         font=(DIALOG_FONT, DIALOG_FONT_SIZE)).pack(anchor=tk.W, padx=10, pady=(10, 5))
+
+            # 使用固定高度的预览区域
+            preview_text = ctk.CTkLabel(
+                preview_frame,
+                text="字体预览: 汉字abc123文字示例",
+                font=(self.current_font, self.font_size),
+                height=50,
+                corner_radius=6,
+                fg_color=("light gray", "gray30")  # 根据模式给予不同背景色
+            )
+            preview_text.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+            # 更新预览的函数
+            def update_preview(*args):
+                selected_indices = self.font_listbox.curselection()
+                if selected_indices:
+                    selected_font = self.font_listbox.get(selected_indices[0])
+                    try:
+                        size = int(size_menu.get())
+                        preview_text.configure(font=(selected_font, size))
+                    except (ValueError, tk.TclError) as e:
+                        print(f"预览更新错误: {e}")
+
+            # 绑定事件
+            self.font_listbox.bind("<<ListboxSelect>>", update_preview)
+            size_menu.configure(command=update_preview)
+
+            # 底部按钮 - 独立显示，确保可见
+            button_frame = ctk.CTkFrame(font_dialog, fg_color="transparent")
+            button_frame.pack(fill=tk.X, padx=15, pady=15)
+
+            def apply_font():
+                selected_indices = self.font_listbox.curselection()
+                if selected_indices:
+                    new_font = self.font_listbox.get(selected_indices[0])
+                    try:
+                        new_size = int(size_menu.get())
+
+                        print(f"用户选择了字体: {new_font}, 大小: {new_size}")
+
+                        # 更新实例变量
+                        self.current_font = new_font
+                        self.font_size = new_size
+
+                        # 更新FontManager中的设置
+                        self.font_manager.current_font = self.current_font
+                        self.font_manager.font_size = self.font_size
+                        self.font_manager.use_custom_fonts = source_var.get()
+
+                        # 如果当前文件夹路径不是默认路径，更新它
+                        current_path = Path(folder_path_var.get())
+                        if current_path != self.font_manager.custom_fonts_dir:
+                            self.font_manager.custom_fonts_dir = current_path
+
+                        # 保存设置到配置文件
+                        self.font_manager.save_settings()
+
+                        # 应用字体设置
+                        self._apply_font_settings()
+
+                        # 强制刷新主窗口
+                        self.root.update_idletasks()
+
+                        # 关闭对话框前等待短暂时间使视觉变化更明显
+                        font_dialog.after(100, font_dialog.destroy)
+
+                        # 显示成功消息
+                        messagebox.showinfo("字体设置",
+                                            f"字体设置已更新并应用到界面。\n"
+                                            f"字体: {new_font}\n"
+                                            f"大小: {new_size}\n"
+                                            f"来源: {'自定义字体文件夹' if source_var.get() else '系统字体'}",
+                                            parent=self.root)
+                    except ValueError as e:
+                        messagebox.showerror("输入错误", f"字体大小设置错误: {e}", parent=font_dialog)
+                    except Exception as e:
+                        messagebox.showerror("应用错误", f"应用字体设置时出错: {e}", parent=font_dialog)
+
+            # 使用更明显的按钮样式
+            apply_button = ctk.CTkButton(
+                button_frame,
+                text="应用字体",
+                command=apply_font,
+                height=40,  # 增加按钮高度
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE, "bold"),  # 固定字体
+                fg_color=("#3B8ED0", "#1F6AA5")  # 更明显的蓝色
+            )
+            apply_button.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+
+            cancel_button = ctk.CTkButton(
+                button_frame,
+                text="取消",
+                command=font_dialog.destroy,
+                height=40,
+                font=(DIALOG_FONT, DIALOG_FONT_SIZE)
+            )
+            cancel_button.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            # 更新控件状态
+            self._update_font_dialog_states(font_dialog, source_var.get())
+
+        else:
+            # 保留原有的Tkinter实现...
+            pass
+
+    def _load_fonts_to_listbox(self):
+        """加载可用字体到列表框"""
+        if hasattr(self, 'font_listbox') and self.font_listbox.winfo_exists():
+            self.font_listbox.delete(0, tk.END)  # 清空列表
+
+            # 获取当前应该显示的字体列表 (系统或自定义)
+            all_fonts = self.font_manager.get_all_fonts()
+
+            # 检查是否为空列表或特殊提示
+            if not all_fonts or (len(all_fonts) == 1 and all_fonts[0].startswith("<")):
+                # 处理没有字体的情况 - 显示提示信息
+                self.font_listbox.insert(tk.END, all_fonts[0] if all_fonts else "<无可用字体>")
+                return
+
+            # 正常情况：添加所有字体
+            for font in all_fonts:
+                self.font_listbox.insert(tk.END, font)
+
+            # 选中当前字体（如果在列表中）
+            if self.current_font in all_fonts:
+                index = all_fonts.index(self.current_font)
+                self.font_listbox.selection_set(index)
+                self.font_listbox.see(index)
+            # 如果当前字体不在新列表中，选择第一项
+            elif all_fonts:
+                self.font_listbox.selection_set(0)
+
+    def _update_font_source(self, dialog, use_custom):
+        """更新字体来源并刷新字体列表"""
+        print(f"切换字体来源: {'自定义文件夹' if use_custom else '系统字体'}")
+
+        # 更新字体管理器设置
+        self.font_manager.use_custom_fonts = use_custom
+
+        # 如果切换到自定义字体，确保已加载自定义文件夹中的字体
+        if use_custom:
+            custom_dir = self.font_manager.custom_fonts_dir
+            print(f"从文件夹加载字体: {custom_dir}")
+            loaded = self.font_manager.load_custom_fonts_from_directory(str(custom_dir))
+            if not loaded:
+                print(f"警告: 文件夹 {custom_dir} 中未找到字体文件")
+                messagebox.showwarning(
+                    "空文件夹",
+                    f"文件夹 '{custom_dir}' 中未找到字体文件。\n\n请将字体文件(.ttf, .otf等)复制到此文件夹中。",
+                    parent=dialog
+                )
+
+        # 更新列表
+        self._load_fonts_to_listbox()
+
+        # 更新对话框控件状态
+        self._update_font_dialog_states(dialog, use_custom)
+
+    def _update_font_dialog_states(self, dialog, use_custom):
+        """根据字体来源设置更新对话框控件状态"""
+        # 查找文件夹相关控件并更新状态
+        for child in dialog.winfo_children():
+            if isinstance(child, ctk.CTkFrame):
+                for frame_child in child.winfo_children():
+                    if isinstance(frame_child, ctk.CTkFrame):
+                        for button in frame_child.winfo_children():
+                            if isinstance(button, ctk.CTkButton) and button.cget("text") == "打开文件夹":
+                                # 启用/禁用打开文件夹按钮
+                                button.configure(state="normal" if use_custom else "disabled")
+
+    def _open_font_folder(self, path_var):
+        """打开或创建字体文件夹"""
+        try:
+            # 获取当前路径
+            current_path = Path(path_var.get())
+
+            # 确保路径存在
+            if not current_path.exists():
+                current_path.mkdir(parents=True, exist_ok=True)
+                print(f"创建字体文件夹: {current_path}")
+
+            # 尝试用系统文件管理器打开文件夹
+            if platform.system() == "Windows":
+                os.startfile(current_path)
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.run(["open", str(current_path)])
+            else:  # Linux
+                subprocess.run(["xdg-open", str(current_path)])
+
+            # 更新路径变量和字体管理器
+            self.font_manager.custom_fonts_dir = current_path
+            path_var.set(str(current_path))
+
+            # 如果启用了自定义字体，重新加载
+            if self.font_manager.use_custom_fonts:
+                self.font_manager.load_custom_fonts_from_directory(str(current_path))
+                self._load_fonts_to_listbox()
+
+        except Exception as e:
+            messagebox.showerror("文件夹操作错误", f"无法操作字体文件夹: {e}")
+
+    def _load_custom_fonts_dialog(self, parent_dialog):
+        """打开对话框选择字体文件夹"""
+        from tkinter import filedialog
+
+        font_dir = filedialog.askdirectory(
+            title="选择包含字体文件的文件夹",
+            parent=parent_dialog,
+            initialdir=str(self.font_manager.custom_fonts_dir)  # 从当前字体文件夹开始
+        )
+
+        if font_dir:
+            # 更新路径变量 - 查找并更新文件夹路径显示
+            for child in parent_dialog.winfo_children():
+                if isinstance(child, ctk.CTkFrame):
+                    for frame in child.winfo_children():
+                        if isinstance(frame, ctk.CTkFrame):
+                            for entry in frame.winfo_children():
+                                if isinstance(entry, ctk.CTkEntry) and hasattr(entry, 'cget'):
+                                    try:
+                                        # 如果这是路径显示框，更新它
+                                        if 'textvariable' in entry.configure():
+                                            entry.configure(textvariable=tk.StringVar(value=font_dir))
+                                            break
+                                    except:
+                                        pass
+
+            # 加载新的字体文件
+            success = self.font_manager.load_custom_fonts_from_directory(font_dir)
+            if success:
+                # 自动切换到自定义字体模式
+                self.font_manager.use_custom_fonts = True
+
+                # 更新字体列表
+                self._load_fonts_to_listbox()
+
+                # 更新对话框控件状态 - 查找并选中自定义字体单选按钮
+                for child in parent_dialog.winfo_children():
+                    if isinstance(child, ctk.CTkFrame):
+                        for frame in child.winfo_children():
+                            if isinstance(frame, ctk.CTkFrame):
+                                for radio in frame.winfo_children():
+                                    if isinstance(radio, ctk.CTkRadioButton) and radio.cget(
+                                            "text") == "自定义字体文件夹":
+                                        radio.select()
+                                        # 更新其他控件状态
+                                        self._update_font_dialog_states(parent_dialog, True)
+                                        break
+
+                # 保存字体文件夹设置
+                self.font_manager.custom_fonts_dir = Path(font_dir)
+                self.font_manager.save_settings(font_dir)
+
+                # 显示成功消息
+                messagebox.showinfo(
+                    "成功",
+                    f"已加载 {len(self.font_manager.custom_fonts)} 个自定义字体",
+                    parent=parent_dialog
+                )
+            else:
+                messagebox.showwarning("警告", "在选定的文件夹中未找到字体文件", parent=parent_dialog)
+
+    # 在程序退出时保存设置
+    def on_close(self):
+        """程序关闭时的处理"""
+        # 保存字体设置
+        if hasattr(self, 'font_manager'):
+            self.font_manager.save_settings()
+        # 退出程序
+        self.root.quit()
+
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -2628,6 +3358,10 @@ if __name__ == "__main__":
         exit()
 
     app = NovelManagerGUI(root)  # 将根窗口传递给 GUI 类
+
+    # 添加窗口关闭事件处理
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
+
     root.mainloop()
 
 # --- END OF FILE 小说助手_完整修复版.py ---
