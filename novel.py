@@ -15,6 +15,9 @@ import tkinter.font as tkFont
 import configparser  # 用于保存配置
 import platform  # 获取操作系统信息
 import subprocess  # For opening folders on macOS and Linux
+import string  # 添加string模块导入，用于字数统计的正则表达式
+import sys  # 添加sys模块导入，用于字数统计的正则表达式
+import time  # 添加time模块导入，用于字数统计的正则表达式
 
 # Import the theme library - place this early
 try:
@@ -603,26 +606,40 @@ class NovelManager:
         return category_path / safe_filename
 
     def save_entry(self, category, title, content, tags=None, existing_path_str=None):
-        """Save or update an entry. Handles rename/move via existing_path_str."""
+        """保存或更新条目。处理重命名/移动操作。
+
+        Args:
+            category: 保存的分类
+            title: 条目标题
+            content: 条目内容
+            tags: 标签列表
+            existing_path_str: 如果更新现有条目，提供其路径；如果是新建，传None
+
+        Returns:
+            保存后的文件路径字符串
+        """
         if not title:
             raise ValueError("标题不能为空")
 
+        # 确保分类存在
         category_path = self.root_dir / category
         if not category_path.is_dir():
             try:
-                # Attempt to add category if dir doesn't exist
-                self.add_category(category)  # This raises error on invalid name/failure
+                # 尝试创建分类目录
+                self.add_category(category)
             except (ValueError, OSError) as e:
                 raise ValueError(f"无效或无法创建分类 '{category}': {e}")
         elif category not in self.categories:
-            # Dir exists but not in list, add it
+            # 目录存在但不在列表中，添加它
             self.categories.append(category)
             self.categories.sort(key=lambda x: x.lower())
 
+        # 准备元数据
         tags = tags or []
         now_iso = datetime.datetime.now().isoformat()
         new_file_path = self._get_entry_path(category, title)
 
+        # 构建原始元数据
         metadata = {
             "title": title,
             "created_at": now_iso,
@@ -630,52 +647,88 @@ class NovelManager:
             "tags": tags
         }
 
-        existing_path = Path(existing_path_str) if existing_path_str else None
-        original_created_at = now_iso
+        # 处理更新现有条目的情况
+        existing_path = None
+        if existing_path_str:
+            existing_path = Path(existing_path_str).resolve()
+            if existing_path.exists() and existing_path.is_file():
+                try:
+                    # 读取现有条目的元数据
+                    existing_data = self.get_entry_by_path(existing_path_str, read_content=False)
+                    if existing_data and "metadata" in existing_data:
+                        # 保留创建时间
+                        metadata["created_at"] = existing_data["metadata"].get("created_at", now_iso)
+                except Exception as e:
+                    print(f"警告: 无法从 {existing_path} 读取元数据: {e}")
 
-        # Handle update/rename case
-        if existing_path and existing_path.exists() and existing_path.is_file():
-            try:
-                existing_data = self.get_entry_by_path(existing_path, read_content=False)
-                if existing_data and "metadata" in existing_data:
-                    original_created_at = existing_data["metadata"].get("created_at", now_iso)
-            except Exception as e:
-                print(f"Warning: Could not read metadata from {existing_path}: {e}")
-
-            # Check if filename needs to change (due to title change)
-            # Note: _get_entry_path calculates the NEW expected path based on NEW title
-            is_rename_or_move = (new_file_path != existing_path)
-        else:
-            existing_path = None  # Ensure it's None for new entries
-            is_rename_or_move = False
-
-        metadata["created_at"] = original_created_at
-        metadata["updated_at"] = now_iso
-        metadata["title"] = title  # Ensure user-facing title is correct
-
+        # 准备文件内容 (JSON元数据 + 内容文本)
         file_content = f"---\n{json.dumps(metadata, ensure_ascii=False, indent=2)}\n---\n\n{content}"
 
+        # 确保目标目录存在
+        new_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 检查是否会覆盖其他文件
+        # 检查是否更新同一个文件的路径比较
+        is_same_file = False
+        if existing_path and new_file_path.exists():
+            try:
+                # 使用绝对路径的字符串进行比较
+                is_same_file = str(new_file_path.resolve()) == str(existing_path)
+                print(f"路径比较: {new_file_path.resolve()} vs {existing_path}, 是否相同: {is_same_file}")
+            except Exception as e:
+                print(f"路径比较错误: {e}")
+                # 保守处理，假设不是同一个文件
+                is_same_file = False
+
+        if new_file_path.exists() and not is_same_file and existing_path is None:
+            # 新建操作，但文件已存在
+            raise FileExistsError(f"目标文件名 '{new_file_path.name}' 在分类 '{category}' 中已存在。")
+
         try:
-            new_file_path.parent.mkdir(parents=True, exist_ok=True)
+            # 创建临时文件并写入内容
+            temp_file_path = new_file_path.with_name(f"{new_file_path.stem}_temp{new_file_path.suffix}")
+            temp_file_path.write_text(file_content, encoding="utf-8")
 
-            # Prevent overwriting a DIFFERENT file if safe filename clashes
-            if new_file_path.exists() and new_file_path != existing_path:
-                # If it's the same logical file being updated (existing_path == new_file_path), allow overwrite.
-                # Otherwise, raise error.
-                raise FileExistsError(f"目标文件名 '{new_file_path.name}' 在分类 '{category}' 中已存在。")
+            # 检查并处理已存在的备份文件
+            backup_path = new_file_path.with_name(f"{new_file_path.stem}_backup{new_file_path.suffix}")
+            if backup_path.exists():
+                try:
+                    # 如果备份文件存在，直接删除它
+                    backup_path.unlink()
+                    print(f"删除旧的备份文件: {backup_path}")
+                except Exception as e:
+                    print(f"警告: 无法删除旧的备份文件: {e}")
 
-            new_file_path.write_text(file_content, encoding="utf-8")
+            # 如果原文件存在，创建备份
+            if new_file_path.exists():
+                try:
+                    shutil.copy2(str(new_file_path), str(backup_path))
+                    print(f"创建文件备份: {backup_path}")
+                except Exception as e:
+                    print(f"警告: 无法创建文件备份: {e}")
 
-            # Delete old file *after* successful save if path changed
-            if existing_path and existing_path.exists() and existing_path != new_file_path:
+            # 使用临时文件替换目标文件（原子操作，避免写入中断导致文件损坏）
+            shutil.move(str(temp_file_path), str(new_file_path))
+            print(f"已保存文件: {new_file_path}")
+
+            # 如果是更新且路径变化了（重命名或移动），删除原文件
+            if existing_path and not is_same_file and existing_path.exists():
                 try:
                     existing_path.unlink()
+                    print(f"已删除原文件: {existing_path}")
                 except OSError as del_e:
-                    print(f"Warning: Could not delete old file '{existing_path}' after rename/move: {del_e}")
+                    print(f"警告: 重命名/移动后无法删除原文件 '{existing_path}': {del_e}")
 
             return str(new_file_path)
         except OSError as e:
-            raise OSError(f"无法写入文件 '{new_file_path}': {e}")
+            # 清理临时文件
+            if 'temp_file_path' in locals() and temp_file_path.exists():
+                try:
+                    temp_file_path.unlink()
+                except:
+                    pass
+            # 直接传递原始错误，不再包装
+            raise
 
     def delete_entry(self, entry_path_str):
         """Move an entry file to the trash directory."""
@@ -846,6 +899,10 @@ class NovelManager:
         if not category_path.is_dir(): return entries
 
         for file_path in category_path.glob("*.md"):
+            # 忽略备份文件
+            if "_backup" in file_path.stem:
+                continue
+
             entry_data = self.get_entry_by_path(file_path, read_content=False)
             title = file_path.stem
             if entry_data and entry_data.get("metadata") and entry_data["metadata"].get("title"):
@@ -1434,6 +1491,8 @@ class NovelManagerGUI:
         list_label = getattr(self, 'entry_list_label', None)
         if not listbox or not listbox.winfo_exists(): return
 
+        print(f"加载分类 '{category}' 的条目")
+
         listbox.delete(0, tk.END)
         self.entry_data_map.clear()
         self.is_search_active = False
@@ -1444,11 +1503,14 @@ class NovelManagerGUI:
         if category and category in self.manager.categories:
             try:
                 entries = self.manager.list_entries(category)
+                print(f"分类 '{category}' 中找到 {len(entries)} 个条目")
+
                 if entries:
                     listbox_state_tk = tk.NORMAL
                     for entry in entries:
                         listbox.insert(tk.END, entry["title"])
                         self.entry_data_map[entry["title"]] = entry["path"]
+                        print(f"  添加条目: {entry['title']} -> {entry['path']}")
                 else:
                     listbox.insert(tk.END, "(无条目)")
                 self.clear_editor()  # Clear editor when category changes
@@ -1536,6 +1598,9 @@ class NovelManagerGUI:
         self.info_label_var.set("未加载条目")
         self.current_entry_path = None
 
+        # 更新字数统计为0
+        self.word_count_var.set("字数: 0 | 英文: 0 | 符号: 0 | 字符: 0 | 行数: 0")
+
         if not keep_selection:
             entry_listbox = getattr(self, 'entry_listbox', None)
             if entry_listbox and entry_listbox.winfo_exists():
@@ -1615,49 +1680,77 @@ class NovelManagerGUI:
 
     def on_entry_select(self, event=None):
         """Handle entry selection."""
-        listbox = event.widget if event and hasattr(event, 'widget') else getattr(self, 'entry_listbox', None)
-        if not listbox or not listbox.winfo_exists(): return
+        # 获取列表控件，适应不同来源的调用
+        listbox = None
+        if event and hasattr(event, 'widget'):
+            # 从事件获取列表控件
+            listbox = event.widget
+        else:
+            # 直接使用类属性中的列表控件
+            listbox = getattr(self, 'entry_listbox', None)
+
+        if not listbox or not listbox.winfo_exists():
+            return
 
         try:
+            # 获取选择
             selection = listbox.curselection()
             if selection:
                 index = int(selection[0])
-                selected_entry = listbox.get(index)
+                selected = listbox.get(index)
 
-                if selected_entry and not selected_entry.startswith("("):
-                    path = self.entry_data_map.get(selected_entry)
-                    if path and path != self.current_entry_path:
-                        print(f"Entry selected: {selected_entry}")
-                        self.current_entry_path = path
+                # 跳过占位符项
+                if selected.startswith("(") and selected.endswith(")"):
+                    return
 
-                        try:
-                            entry_data = self.manager.get_entry_by_path(path)
-                            if entry_data:
-                                # Update editor
-                                editor = getattr(self, 'content_text', None)
-                                if editor:
-                                    self.clear_editor(keep_selection=True)
-                                    if isinstance(editor, ctk.CTkTextbox):
-                                        editor.insert("1.0", entry_data.get("content", ""))
-                                    else:
-                                        editor.insert(tk.END, entry_data.get("content", ""))
+                # 从条目映射获取路径
+                path = self.entry_data_map.get(selected)
 
-                                # Update tags/title
-                                title_var = getattr(self, 'title_var', None)
-                                tags_var = getattr(self, 'tags_var', None)
-                                metadata = entry_data.get("metadata", {})
+                # 检查路径是否有效
+                if path and os.path.exists(path):
+                    # 使用绝对路径，确保路径比较的一致性
+                    self.current_entry_path = str(Path(path).resolve())
+                    try:
+                        # 打印选中的条目路径（调试用）
+                        print(f"Entry selected: {self.current_entry_path}")
 
-                                if title_var:
-                                    title_var.set(metadata.get("title", ""))
-                                if tags_var:
-                                    tags_var.set(", ".join(metadata.get("tags", [])))
+                        # 获取条目数据
+                        entry_data = self.manager.get_entry_by_path(self.current_entry_path)
+                        if entry_data:
+                            # 更新编辑器
+                            editor = getattr(self, 'content_text', None)
+                            if editor:
+                                self.clear_editor(keep_selection=True)
+                                if isinstance(editor, ctk.CTkTextbox):
+                                    editor.insert("1.0", entry_data.get("content", ""))
+                                else:
+                                    editor.insert(tk.END, entry_data.get("content", ""))
 
-                                # Update info
-                                self._update_info_label(metadata)
-                        except Exception as e:
-                            messagebox.showerror("读取错误", f"读取条目时发生错误: {e}", parent=self.root)
+                            # 更新标签和标题
+                            title_var = getattr(self, 'title_var', None)
+                            tags_var = getattr(self, 'tags_var', None)
+                            metadata = entry_data.get("metadata", {})
+
+                            if title_var:
+                                title_var.set(metadata.get("title", ""))
+                            if tags_var:
+                                tags_var.set(", ".join(metadata.get("tags", [])))
+
+                            # 更新信息
+                            self._update_info_label(metadata)
+
+                            # 更新字数统计
+                            self._update_word_count()
+                    except Exception as e:
+                        messagebox.showerror("读取错误", f"读取条目时发生错误: {e}", parent=self.root)
+                elif path:
+                    # 路径存在于映射中但文件不存在
+                    messagebox.showwarning("文件不存在", f"条目文件不存在或已被移动:\n{path}", parent=self.root)
+                    # 尝试刷新列表
+                    if self.current_category:
+                        self.load_entries(self.current_category)
             else:
-                # Selection cleared
+                # 清除选择时不做特殊处理
                 pass
         except Exception as e:
             print(f"Error in entry selection: {e}")
@@ -1806,119 +1899,14 @@ class NovelManagerGUI:
             messagebox.showinfo("编辑条目", "请选择单个条目进行编辑。", parent=self.root)
 
     def on_save(self):
-        """Save current editor content (new or update)."""
-        title = self.title_var.get().strip()
-        if not title:
-            messagebox.showwarning("需要标题", "标题不能为空。", parent=self.root)
-            # Find title entry and focus it
-            # This search is basic, might need improvement for complex layouts
-            if hasattr(self, 'frame_right'):  # Check if right frame exists
-                for widget in self.frame_right.winfo_children():
-                    # Check frames within the right frame
-                    if isinstance(widget, (ctk.CTkFrame, ttk.Frame)):
-                        for subwidget in widget.winfo_children():
-                            # Check frames within those subframes (like title_frame)
-                            if isinstance(subwidget, (ctk.CTkFrame, ttk.Frame)):
-                                for entry_widget in subwidget.winfo_children():
-                                    if isinstance(entry_widget, (ctk.CTkEntry, ttk.Entry)):
-                                        # Check if this entry uses the title_var
-                                        try:
-                                            if str(entry_widget.cget('textvariable')) == str(self.title_var):
-                                                entry_widget.focus_set()
-                                                return  # Found and focused
-                                        except tk.TclError:
-                                            pass  # Handle cases where textvariable isn't set directly
-            return  # Fallback if focus setting failed
-
-        content = ""
-        content_widget = getattr(self, 'content_text', None)
-        if content_widget and content_widget.winfo_exists():
-            start_index = "0.0" if isinstance(content_widget, ctk.CTkTextbox) else 1.0
-            try:
-                content = content_widget.get(start_index, tk.END).strip()
-            except:
-                pass
-
-        tags = [tag.strip() for tag in self.tags_var.get().split(",") if tag.strip()]
-        category_to_save_in = None
-        path_to_update = self.current_entry_path
-
-        # Determine save context (new vs update, target category)
-        if path_to_update:  # Potentially updating existing
-            try:
-                existing_path = Path(path_to_update)
-                # Check if the path seems valid and within the root directory structure
-                if existing_path.is_file() and self.manager.root_dir in existing_path.parents and existing_path.parent.name != "_trash":
-                    category_to_save_in = existing_path.parent.name
-                else:
-                    raise ValueError("无效路径或指向回收站")  # Path outside root or in trash
-            except Exception as e:
-                print(f"Invalid existing path '{path_to_update}': {e}")
-                if messagebox.askyesno("路径无效",
-                                       f"当前编辑条目的文件路径似乎无效或已被移动。\n路径: {path_to_update}\n\n是否尝试在当前选中的分类 '{self.current_category}' 中保存为一个新条目？",
-                                       parent=self.root):
-                    if not self.current_category: messagebox.showerror("无法保存", "没有选中的分类来保存新条目。",
-                                                                       parent=self.root); return
-                    category_to_save_in = self.current_category
-                    path_to_update = None  # Treat as a new save
-                else:
-                    return  # Cancel save
-        else:  # Creating new entry
-            if not self.current_category: messagebox.showwarning("无法保存", "请先选择一个分类以保存新条目。",
-                                                                 parent=self.root); return
-            category_to_save_in = self.current_category
-            path_to_update = None
-
-        if not category_to_save_in: messagebox.showerror("保存错误", "无法确定要保存到的分类。",
-                                                         parent=self.root); return
-
-        # --- Perform Save ---
-        try:
-            # print(f"Debug: Calling save_entry. Category='{category_to_save_in}', Title='{title}', ExistingPath='{path_to_update}'")
-            saved_path_str = self.manager.save_entry(category_to_save_in, title, content, tags,
-                                                     existing_path_str=path_to_update)
-            print(f"Save successful: {saved_path_str}")
-
-            # --- Update State and UI ---
-            self.current_entry_path = saved_path_str
-            final_category = Path(saved_path_str).parent.name
-            final_title = title  # Title used for saving
-
-            # Reload category list if save created a new one (check manager's list *after* save)
-            if final_category not in self.manager.categories:
-                print("Category list updated by save. Reloading.")
-                self.load_categories()
-                self._select_listbox_item_by_text(self.category_listbox, final_category)
-
-            # Refresh entry list/search results and select the saved item
-            if self.is_search_active:
-                self.on_search()  # Re-run search
-                search_display_text = f"[{final_category}] {final_title}"
-                self._select_listbox_item_by_text(self.entry_listbox, search_display_text)
-            elif self.current_category == final_category:
-                self.load_entries(final_category)  # Reload current category list
-                self._select_listbox_item_by_text(self.entry_listbox, final_title)
-            else:  # Saved in a different category, don't switch view automatically
-                print(f"Entry saved in '{final_category}', but viewing '{self.current_category}'.")
-                pass
-
-            # Update info label from the actually saved file's metadata
-            try:
-                final_data = self.manager.get_entry_by_path(saved_path_str, read_content=False)
-                if final_data and final_data.get("metadata"):
-                    self._update_info_label(final_data["metadata"])
-                else:
-                    self.info_label_var.set("保存成功 (信息刷新失败)")
-            except Exception as read_e:
-                print(f"Warning: Error reading metadata post-save: {read_e}")
-                self.info_label_var.set("保存成功 (信息刷新错误)")
-
-        except (ValueError, OSError, FileExistsError) as e:
-            messagebox.showerror("保存错误", f"无法保存条目:\n{str(e)}", parent=self.root)
-        except Exception as e:
-            messagebox.showerror("意外错误", f"保存时发生未知错误:\n{str(e)}", parent=self.root)
-            import traceback;
-            traceback.print_exc()
+        """根据当前情况决定使用哪个保存方法"""
+        # 检查是否有选择事件来源
+        if getattr(self, 'save_source', None) == "update":
+            # 使用保存修改
+            self.on_save_update()
+        else:
+            # 使用另存为新建
+            self.on_save_as_new()
 
     def on_delete_selected_entries(self):
         """Move selected entries to trash."""
@@ -2866,11 +2854,25 @@ class NovelManagerGUI:
             ctk.CTkLabel(tags_frame, text="(逗号分隔)", font=("Microsoft YaHei UI", 10, "italic"),
                          text_color="gray").pack(side=tk.LEFT, padx=(8, 0))
 
-            # 信息标签 (创建/更新日期)
+            # 信息和字数统计行
+            info_stats_frame = ctk.CTkFrame(editor_top_frame, fg_color="transparent")
+            info_stats_frame.pack(fill=tk.X, pady=(0, 5))
+
+            # 信息标签 (创建/更新日期) - 增大字号
             self.info_label_var = tk.StringVar(value="未加载条目")
-            info_label = ctk.CTkLabel(editor_top_frame, textvariable=self.info_label_var,
-                                      font=("Microsoft YaHei UI", 10), text_color="gray")
-            info_label.pack(anchor=tk.W, pady=(5, 5))
+            info_label = ctk.CTkLabel(info_stats_frame, textvariable=self.info_label_var,
+                                      font=("Microsoft YaHei UI", 12), text_color="gray")
+            info_label.pack(side=tk.LEFT, fill=tk.X, pady=(5, 0))
+
+            # 字数统计行（单独一行）
+            stats_frame = ctk.CTkFrame(editor_top_frame, fg_color="transparent")
+            stats_frame.pack(fill=tk.X, pady=(0, 5))
+
+            # 新增：字数统计标签
+            self.word_count_var = tk.StringVar(value="字数: 0 | 英文: 0 | 符号: 0 | 字符: 0 | 行数: 0")
+            word_count_label = ctk.CTkLabel(stats_frame, textvariable=self.word_count_var,
+                                            font=("Microsoft YaHei UI", 12), text_color="gray")
+            word_count_label.pack(side=tk.LEFT, fill=tk.X, pady=(0, 5))
 
             # --- 内容文本区域框架 ---
             content_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -2887,6 +2889,15 @@ class NovelManagerGUI:
             )
             self.content_text.pack(fill=tk.BOTH, expand=True)
 
+            # 绑定文本变更事件来更新字数统计
+            self.content_text.bind("<<Modified>>", self._update_word_count)
+
+            # 在FocusOut时也更新字数统计
+            self.content_text.bind("<FocusOut>", self._update_word_count)
+
+            # KeyRelease事件更新字数统计
+            self.content_text.bind("<KeyRelease>", self._update_word_count)
+
             # --- 保存按钮框架 ---
             save_frame = ctk.CTkFrame(frame, fg_color="transparent")
             save_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
@@ -2895,17 +2906,33 @@ class NovelManagerGUI:
             mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
             colors = self.soft_colors[mode]
 
-            # 保存按钮，使用柔和绿色
+            # 创建两个按钮：新建和保存
+            buttons_frame = ctk.CTkFrame(save_frame, fg_color="transparent")
+            buttons_frame.pack(fill=tk.X)
+
+            # 保存按钮（更新现有条目）
             ctk.CTkButton(
-                save_frame,
-                text="保存",
-                command=self.on_save,
+                buttons_frame,
+                text="保存修改",
+                command=lambda: self._set_save_source_and_save("update"),
                 font=("Microsoft YaHei UI", 14, "bold"),
                 height=40,
                 fg_color=colors["button_green"],
                 hover_color=colors["button_green_hover"],
                 text_color=colors["list_select_fg"]
-            ).pack(fill=tk.X)
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+
+            # 新建按钮
+            ctk.CTkButton(
+                buttons_frame,
+                text="另存为新建",
+                command=lambda: self._set_save_source_and_save("new"),
+                font=("Microsoft YaHei UI", 14, "bold"),
+                height=40,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
             return frame
 
@@ -2926,10 +2953,23 @@ class NovelManagerGUI:
             self.tags_var = tk.StringVar()
             ttk.Entry(tags_frame, textvariable=self.tags_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
             ttk.Label(tags_frame, text="(逗号分隔)", font=("", 8, "italic")).pack(side=tk.LEFT, padx=(5, 0))
-            # Info Label
+
+            # 信息行
+            info_frame = ttk.Frame(editor_top_frame)
+            info_frame.pack(fill=tk.X, pady=(3, 0))
+
+            # Info Label - 增大字号
             self.info_label_var = tk.StringVar(value="未加载条目")
-            info_label = ttk.Label(editor_top_frame, textvariable=self.info_label_var, font=("", 8), foreground="gray")
-            info_label.pack(anchor=tk.W, pady=(3, 0))
+            info_label = ttk.Label(info_frame, textvariable=self.info_label_var, font=("", 10), foreground="gray")
+            info_label.pack(side=tk.LEFT, fill=tk.X)
+
+            # 新增：字数统计标签（单独一行）
+            stats_frame = ttk.Frame(editor_top_frame)
+            stats_frame.pack(fill=tk.X, pady=(3, 0))
+            self.word_count_var = tk.StringVar(value="字数: 0 | 英文: 0 | 符号: 0 | 字符: 0 | 行数: 0")
+            word_count_label = ttk.Label(stats_frame, textvariable=self.word_count_var, font=("", 10),
+                                         foreground="gray")
+            word_count_label.pack(side=tk.LEFT, fill=tk.X)
 
             # Content Area Frame
             content_frame = ttk.Frame(frame)
@@ -2942,8 +2982,22 @@ class NovelManagerGUI:
             editor_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.content_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-            # Save Button
-            ttk.Button(frame, text="保存", command=self.on_save).pack(pady=(0, 5), padx=0, fill=tk.X)
+            # 绑定文本变更事件来更新字数统计
+            self.content_text.bind("<<Modified>>", self._update_word_count)
+
+            # 在FocusOut时也更新字数统计
+            self.content_text.bind("<FocusOut>", self._update_word_count)
+
+            # KeyRelease事件更新字数统计
+            self.content_text.bind("<KeyRelease>", self._update_word_count)
+
+            # 按钮区域 - 分为保存修改和另存为新建两个按钮
+            buttons_frame = ttk.Frame(frame)
+            buttons_frame.pack(fill=tk.X, pady=(5, 0))
+            ttk.Button(buttons_frame, text="保存修改", command=lambda: self._set_save_source_and_save("update")).pack(
+                side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+            ttk.Button(buttons_frame, text="另存为新建", command=lambda: self._set_save_source_and_save("new")).pack(
+                side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
 
             return frame
 
@@ -3630,6 +3684,351 @@ class NovelManagerGUI:
             self._beautify_listbox(self.category_listbox)
         if hasattr(self, 'entry_listbox') and self.entry_listbox.winfo_exists():
             self._beautify_listbox(self.entry_listbox)
+
+    def _update_word_count(self, event=None):
+        """更新文本编辑器中的字数统计"""
+        try:
+            content_widget = getattr(self, 'content_text', None)
+            if content_widget and content_widget.winfo_exists():
+                # 获取文本内容
+                start_index = "0.0" if isinstance(content_widget, ctk.CTkTextbox) else "1.0"
+                try:
+                    content = content_widget.get(start_index, tk.END)
+
+                    # 去掉最后的换行符
+                    if content.endswith("\n"):
+                        content = content[:-1]
+
+                    # 中文字符（及其他CJK区域字符）
+                    chinese_chars = len(re.findall(r'[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]', content))
+
+                    # 英文单词和字母（连续的字母序列和单个字母）
+                    english_words = len(re.findall(r'\b[a-zA-Z]+\b', content))
+                    english_chars = len(re.findall(r'[a-zA-Z]', content))
+
+                    # 数字（连续的数字序列和单个数字）
+                    numbers = len(re.findall(r'\b\d+\b', content))
+                    number_chars = len(re.findall(r'\d', content))
+
+                    # 标点符号计数（中英文标点）
+                    punctuation = len(re.findall(r'[.,;:!?，。；：！？、【】「」『』()（）[\]{}]', content))
+
+                    # 总字符数（包括空格和换行符）
+                    total_chars = len(content)
+
+                    # 不包含空格和换行符的总字符数
+                    chars_no_spaces = len(re.sub(r'\s', '', content))
+
+                    # 总行数
+                    lines = content.count('\n') + 1 if content else 0
+
+                    # 总字数（按中文习惯：中文字符+英文单词+数字，不计标点和空格）
+                    word_count = chinese_chars + english_words + numbers
+
+                    # 更新字数统计标签 - 按照指定顺序：总字数 英文数 符号数 字符数 行数
+                    stat_text = f"字数: {word_count} | 英文: {english_chars} | 符号: {punctuation} | 字符: {chars_no_spaces} | 行数: {lines}"
+                    self.word_count_var.set(stat_text)
+
+                    # 对于tkText，需要重置Modified标志
+                    if isinstance(content_widget, tk.Text):
+                        content_widget.edit_modified(False)
+                except Exception as e:
+                    print(f"字数统计错误: {e}")
+        except Exception as e:
+            print(f"更新字数统计时出错: {e}")
+
+    def on_save_update(self):
+        """保存修改现有条目的内容"""
+        title = self.title_var.get().strip()
+        if not title:
+            messagebox.showwarning("需要标题", "标题不能为空。", parent=self.root)
+            return
+
+        # 获取内容和标签
+        content = self._get_content_from_editor()
+        tags = self._get_tags_from_entry()
+
+        # 确定保存的分类（在搜索模式下可能不同）
+        category = self._get_current_category_for_save()
+
+        # 查找当前分类中是否有同名文件
+        target_path = self.manager._get_entry_path(category, title)
+
+        # 确定要使用的路径
+        existing_path_str = None
+
+        # 如果有选中的条目且文件存在，使用它
+        if self.current_entry_path and Path(self.current_entry_path).exists():
+            existing_path_str = self.current_entry_path
+            print(f"使用选中条目路径: {existing_path_str}")
+        # 如果当前分类中存在同名文件，直接使用该文件路径
+        elif target_path.exists():
+            existing_path_str = str(target_path)
+            print(f"找到当前分类中的同名文件: {existing_path_str}")
+        # 在当前entry_data_map中查找同名条目
+        else:
+            for title_text, path in self.entry_data_map.items():
+                if title_text == title:
+                    existing_path_str = path
+                    print(f"在映射中找到同名条目: {title} -> {path}")
+                    break
+
+        # 查找旧标题以便更新映射
+        old_title = None
+        if existing_path_str:
+            try:
+                for title_text, path in self.entry_data_map.items():
+                    if Path(path).resolve() == Path(existing_path_str).resolve():
+                        old_title = title_text
+                        print(f"找到旧标题: {old_title} -> {path}")
+                        break
+            except Exception as e:
+                print(f"查找旧标题时出错: {e}")
+
+        try:
+            # 保存内容
+            saved_path_str = self.manager.save_entry(
+                category, title, content, tags,
+                existing_path_str=existing_path_str
+            )
+
+            # 保存后的路径
+            print(f"保存后路径: {saved_path_str}")
+
+            # 更新当前路径
+            self.current_entry_path = saved_path_str
+
+            # 更新映射
+            if old_title and old_title != title:
+                if old_title in self.entry_data_map:
+                    print(f"从映射中移除旧条目: {old_title}")
+                    del self.entry_data_map[old_title]
+
+            # 添加/更新新标题映射
+            self.entry_data_map[title] = saved_path_str
+            print(f"更新映射: {title} -> {saved_path_str}")
+
+            # 更新UI状态
+            self._update_ui_after_save(saved_path_str, title, category)
+
+            # 确保条目已被选中
+            if self.entry_listbox and not self.is_search_active:
+                if not self.entry_listbox.curselection():
+                    print("列表未选中，尝试选择条目...")
+                    self._select_listbox_item_by_text(self.entry_listbox, title)
+                    # 强制触发条目选择事件
+                    self.on_entry_select(None)
+
+            messagebox.showinfo("保存成功", "条目已成功保存。", parent=self.root)
+
+        except Exception as e:
+            messagebox.showerror("保存错误", f"无法保存条目:\n{str(e)}", parent=self.root)
+            import traceback
+            traceback.print_exc()
+
+    def on_save_as_new(self):
+        """将当前内容另存为新条目，如有重名自动添加后缀"""
+        title = self.title_var.get().strip()
+        if not title:
+            messagebox.showwarning("需要标题", "标题不能为空。", parent=self.root)
+            return
+
+        # 获取内容和标签
+        content = self._get_content_from_editor()
+        tags = self._get_tags_from_entry()
+
+        # 确定保存的分类
+        category = self._get_current_category_for_save()
+
+        # 检查当前分类下是否已有同名文件或带序号的文件
+        category_path = self.manager.root_dir / category
+        original_title = title
+        safe_filename = self.manager._get_safe_filename(title)
+
+        # 提取基础标题（去掉已有的数字后缀）
+        base_title_match = re.match(r'^(.*?)(?:-\d+)?$', original_title)
+        base_title = base_title_match.group(1) if base_title_match else original_title
+
+        # 查找当前分类目录下所有以该基础标题开头的文件
+        existing_numbers = []
+        pattern = f"^{re.escape(self.manager._get_safe_filename(base_title))}(?:-(\d+))?\.md$"
+
+        try:
+            for file_path in category_path.glob("*.md"):
+                # 忽略备份文件
+                if "_backup" in file_path.name:
+                    continue
+
+                match = re.match(pattern, file_path.name)
+                if match:
+                    if match.group(1):  # 捕获了数字部分
+                        existing_numbers.append(int(match.group(1)))
+                    else:
+                        # 存在无后缀的原始文件
+                        existing_numbers.append(0)
+        except Exception as e:
+            print(f"查找现有文件时出错: {e}")
+
+        # 确定新序号
+        counter = 0
+        if existing_numbers:
+            # 如果已有文件，找出最大序号并+1
+            counter = max(existing_numbers) + 1
+
+        # 根据需要添加序号
+        if counter > 0:
+            title = f"{base_title}-{counter}"
+            print(f"检测到文件名冲突，使用新名称: {title}")
+
+        # 尝试保存
+        saved_path_str = None
+        try:
+            # 以新条目方式保存（不传递existing_path_str参数）
+            saved_path_str = self.manager.save_entry(
+                category, title, content, tags,
+                existing_path_str=None  # 强制作为新条目处理
+            )
+        except (FileExistsError, OSError) as e:
+            # 如果仍然冲突（极少情况），使用递增方式继续尝试
+            error_str = str(e)
+            if "目标文件名" in error_str and "已存在" in error_str:
+                # 再次尝试递增命名
+                counter = max(existing_numbers) + 1 if existing_numbers else 1
+                while True:
+                    try:
+                        title = f"{base_title}-{counter}"
+                        print(f"再次尝试新名称: {title}")
+                        saved_path_str = self.manager.save_entry(
+                            category, title, content, tags,
+                            existing_path_str=None
+                        )
+                        break  # 保存成功
+                    except (FileExistsError, OSError) as inner_e:
+                        if "目标文件名" in str(inner_e) and "已存在" in str(inner_e):
+                            counter += 1
+                            if counter > 100:  # 安全限制
+                                raise ValueError("无法找到可用的文件名，请尝试使用不同的标题。")
+                        else:
+                            # 其他错误直接报告
+                            raise
+            else:
+                # 其他错误
+                messagebox.showerror("保存错误", f"无法保存条目:\n{str(e)}", parent=self.root)
+                return
+        except Exception as e:
+            messagebox.showerror("保存错误", f"无法保存条目:\n{str(e)}", parent=self.root)
+            import traceback
+            traceback.print_exc()
+            return
+
+        if saved_path_str:
+            # 更新界面和数据映射
+            self.current_entry_path = saved_path_str
+
+            # 直接更新title与路径的映射，确保不需要重新加载即可选择
+            if self.current_category == category and not self.is_search_active:
+                self.entry_data_map[title] = saved_path_str
+
+            # 更新UI状态
+            self._update_ui_after_save(saved_path_str, title, category)
+
+            # 如果标题有变化（添加了后缀），更新标题栏
+            if title != original_title:
+                self.title_var.set(title)
+                messagebox.showinfo("保存成功", f"由于文件名冲突，条目已另存为 '{title}'。", parent=self.root)
+            else:
+                messagebox.showinfo("保存成功", "条目已另存为新条目。", parent=self.root)
+
+    def _get_content_from_editor(self):
+        """从编辑器获取内容文本"""
+        content = ""
+        content_widget = getattr(self, 'content_text', None)
+        if content_widget and content_widget.winfo_exists():
+            start_index = "0.0" if isinstance(content_widget, ctk.CTkTextbox) else 1.0
+            try:
+                content = content_widget.get(start_index, tk.END).strip()
+            except Exception as e:
+                print(f"获取编辑器内容时出错: {e}")
+        return content
+
+    def _get_tags_from_entry(self):
+        """从标签输入框获取标签列表"""
+        tags_text = self.tags_var.get().strip()
+        tags = [t.strip() for t in tags_text.split(",")] if tags_text else []
+        # 过滤空标签
+        return [t for t in tags if t]
+
+    def _get_current_category_for_save(self):
+        """确定当前应该保存到的分类"""
+        category = self.current_category
+        if self.is_search_active and self.current_entry_path:
+            try:
+                path_obj = Path(self.current_entry_path)
+                if path_obj.exists():
+                    category = path_obj.parent.name
+            except Exception as e:
+                print(f"确定保存分类时出错: {e}")
+        return category
+
+    def _update_ui_after_save(self, saved_path_str, title, category):
+        """保存后更新UI状态"""
+        # 更新当前路径
+        self.current_entry_path = saved_path_str
+        print(f"更新UI: 当前路径设置为 {saved_path_str}")
+
+        # 更新列表显示
+        if not self.is_search_active and self.current_category == category:
+            # 仅在同一分类且非搜索模式下重载列表
+            self.load_entries(self.current_category)
+            print(f"列表重新加载，尝试选择条目: {title}")
+            # 查找并选中新标题项
+            if self._select_listbox_item_by_text(self.entry_listbox, title):
+                print(f"条目 '{title}' 已在列表中选中")
+                # 强制触发条目选择事件，确保UI状态正确
+                self.on_entry_select(None)
+            else:
+                print(f"警告: 无法在列表中找到条目 '{title}'")
+        elif self.is_search_active:
+            # 重新执行搜索以更新结果
+            print("在搜索模式下重新执行搜索")
+            self.on_search()
+
+            # 尝试在搜索结果中选中保存的条目
+            if self._select_listbox_item_by_text(self.entry_listbox, title):
+                print(f"条目 '{title}' 已在搜索结果中选中")
+                self.on_entry_select(None)
+            else:
+                print(f"警告: 无法在搜索结果中找到条目 '{title}'")
+
+        # 更新信息标签
+        try:
+            final_data = self.manager.get_entry_by_path(saved_path_str, read_content=False)
+            if final_data and final_data.get("metadata"):
+                self._update_info_label(final_data["metadata"])
+            else:
+                self.info_label_var.set("保存成功 (信息刷新失败)")
+        except Exception as read_e:
+            print(f"保存后刷新元数据出错: {read_e}")
+            self.info_label_var.set("保存成功 (信息刷新错误)")
+
+        # 更新字数统计
+        self._update_word_count()
+
+    # 保留原有on_save方法以兼容其他代码调用
+    def on_save(self):
+        """根据当前情况决定使用哪个保存方法"""
+        # 检查是否有选择事件来源
+        if getattr(self, 'save_source', None) == "update":
+            # 使用保存修改
+            self.on_save_update()
+        else:
+            # 使用另存为新建
+            self.on_save_as_new()
+
+    def _set_save_source_and_save(self, save_source):
+        """设置保存来源并保存条目"""
+        self.save_source = save_source
+        self.on_save()
 
 
 # --- Main Execution ---
