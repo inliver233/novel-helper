@@ -40,6 +40,15 @@ except ImportError:
     HAS_CTK = False
     HAS_CTK_PANED = False
 
+# 导入AI相关功能
+try:
+    from ai import AIEngine, ConfigDialog, OptimizeDialog, load_ai_config, get_ai_engine
+
+    HAS_AI = True
+except ImportError:
+    print("Warning: AI功能模块未找到。部分功能将不可用。")
+    HAS_AI = False
+
 
 # --- 添加字体管理类 ---
 class FontManager:
@@ -2649,6 +2658,36 @@ class NovelManagerGUI:
             mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
             colors = self.soft_colors[mode]
 
+            # --- AI功能按钮区域 ---
+            ai_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            ai_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+            # AI配置按钮
+            ai_config_btn = ctk.CTkButton(
+                ai_frame,
+                text="AI配置",
+                width=85,
+                font=("Microsoft YaHei UI", 15),
+                command=self.on_ai_config,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            )
+            ai_config_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+            # AI优化按钮
+            ai_optimize_btn = ctk.CTkButton(
+                ai_frame,
+                text="AI优化",
+                width=85,
+                font=("Microsoft YaHei UI", 15),
+                command=self.on_ai_optimize,
+                fg_color=colors["button_green"],
+                hover_color=colors["button_green_hover"],
+                text_color=colors["list_select_fg"]
+            )
+            ai_optimize_btn.pack(side=tk.LEFT)
+
             theme_button = ctk.CTkButton(
                 top_button_frame,
                 text="主题",
@@ -2768,6 +2807,16 @@ class NovelManagerGUI:
         else:  # ttk fallback
             frame = ttk.Frame(parent, padding=5)
 
+            # --- AI功能按钮区域 ---
+            ai_frame = ttk.Frame(frame)
+            ai_frame.pack(fill=tk.X, pady=(0, 5))
+
+            # AI配置按钮
+            ttk.Button(ai_frame, text="AI配置", width=10, command=self.on_ai_config).pack(side=tk.LEFT, padx=(0, 5))
+
+            # AI优化按钮
+            ttk.Button(ai_frame, text="AI优化", width=10, command=self.on_ai_optimize).pack(side=tk.LEFT)
+
             # 添加顶部按钮框架
             top_button_frame = ttk.Frame(frame)
             top_button_frame.pack(fill=tk.X, pady=(0, 5))
@@ -2801,7 +2850,6 @@ class NovelManagerGUI:
             ttk.Button(cat_button_frame, text="刷新", command=self.on_refresh).pack(side=tk.RIGHT)
             return frame
 
-    # --- >> _create_middle_pane and _create_right_pane unchanged from previous version << ---
     def _create_middle_pane(self, parent):
         """创建条目列表/搜索结果面板"""
         if HAS_CTK:
@@ -4144,13 +4192,70 @@ class NovelManagerGUI:
         self.save_source = save_source
         self.on_save()
 
+    # 在NovelManagerGUI类的末尾添加AI相关方法
+    def on_ai_config(self):
+        """打开AI配置对话框"""
+        if not HAS_AI:
+            messagebox.showwarning("功能不可用", "AI功能模块未找到，请确保ai.py文件存在且可导入。", parent=self.root)
+            return
+
+        try:
+            # 获取AI引擎实例，如果不存在则初始化一个
+            ai_engine = get_ai_engine()
+            # 显示配置对话框
+            config_dialog = ConfigDialog(self.root, ai_engine)
+            # 配置对话框是模态的，会阻塞直到关闭
+        except Exception as e:
+            messagebox.showerror("AI配置错误", f"打开AI配置对话框时出错：\n{str(e)}", parent=self.root)
+
+    def on_ai_optimize(self):
+        """打开AI内容优化对话框"""
+        if not HAS_AI:
+            messagebox.showwarning("功能不可用", "AI功能模块未找到，请确保ai.py文件存在且可导入。", parent=self.root)
+            return
+
+        try:
+            # 获取当前编辑器中的内容
+            content = self._get_content_from_editor()
+            if not content.strip():
+                messagebox.showwarning("内容为空", "当前没有内容可以优化，请先选择或创建一个条目。", parent=self.root)
+                return
+
+            # 获取AI引擎实例
+            ai_engine = get_ai_engine()
+
+            # 无需预先判断配置状态，直接创建优化对话框
+            # 在优化对话框内部会处理未配置的情况
+            optimize_dialog = OptimizeDialog(self.root, ai_engine, content)
+
+            # 对话框关闭后，检查是否有结果需要应用到编辑器
+            if optimize_dialog.result:
+                # 如果用户点击了"应用到编辑器"按钮，将优化后的内容更新到编辑器
+                content_widget = getattr(self, 'content_text', None)
+                if content_widget and content_widget.winfo_exists():
+                    # 清空当前内容
+                    start_index = "0.0" if isinstance(content_widget, ctk.CTkTextbox) else "1.0"
+                    content_widget.delete(start_index, tk.END)
+                    # 插入优化后的内容
+                    content_widget.insert(tk.END, optimize_dialog.result)
+                    # 更新字数统计
+                    self._update_word_count()
+                    # 提示用户保存
+                    messagebox.showinfo("优化完成", "内容已更新，请记得保存更改。", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("AI优化错误", f"使用AI优化内容时出错：\n{str(e)}", parent=self.root)
+
 
 # --- Main Execution ---
 if __name__ == "__main__":
+    # 创建配置目录
+    config_dir = Path("config")
+    config_dir.mkdir(exist_ok=True)
+
     # 优先使用 CustomTkinter 的根窗口
     root = ctk.CTk() if HAS_CTK else tk.Tk()
+    root.title("网文创作助手 V3.2 (带AI优化)")
 
-    # 确保 NovelManager 及其目录在 GUI 完全启动前已初始化
     try:
         manager = NovelManager()  # 初始化管理器一次，创建目录
     except Exception as e:
