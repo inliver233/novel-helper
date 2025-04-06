@@ -1256,7 +1256,7 @@ class NovelManager:
 class NovelManagerGUI:
     def __init__(self, root, manager):
         self.root = root
-        self.root.title("网文创作助手 V3.2 (界面修复)")
+        self.root.title("网文创作助手 V3.3 (ai优化添加)")
         self.root.geometry("1300x850")
 
         self.manager = manager
