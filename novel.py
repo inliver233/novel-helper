@@ -374,13 +374,15 @@ class MoveEntryDialog(ctk.CTkToplevel if HAS_CTK else Toplevel):
 # --- Custom Dialog for Viewing Trash ---
 # (代码与上一个版本相同，保持不变)
 class TrashDialog(Toplevel):
-    def __init__(self, parent, trash_items):
+    def __init__(self, parent, trash_items, callback=None):
         super().__init__(parent)
         self.title("回收站内容")
         self.geometry("550x450")  # 稍大一点
         self.transient(parent)
-        self.grab_set()
-
+        # 移除 grab_set 使对话框为非模态
+        # self.grab_set()
+        
+        self.callback = callback  # 添加回调函数
         self.selected_items = []
         self.result_action = None
 
@@ -531,15 +533,22 @@ class TrashDialog(Toplevel):
             close_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
-        self.wait_window(self)
+        # 移除等待窗口关闭
+        # self.wait_window(self)
 
     def on_restore(self):
         selected_indices = self.listbox.curselection()
         if not selected_indices:
             messagebox.showwarning("选择项目", "请先选择要恢复的项目。", parent=self)
             return
+        
         self.selected_items = [self.item_map[self.listbox.get(index)] for index in selected_indices]
         self.result_action = "restore"
+        
+        # 如果提供了回调函数，调用它并传递结果
+        if self.callback:
+            self.callback(self.selected_items, "restore")
+        
         self.destroy()
 
     def on_delete_selected(self):
@@ -563,11 +572,21 @@ class TrashDialog(Toplevel):
                                icon='warning', parent=self):
             self.selected_items = items_to_delete_paths
             self.result_action = "delete"
+            
+            # 如果提供了回调函数，调用它并传递结果
+            if self.callback:
+                self.callback(items_to_delete_paths, "delete")
+                
             self.destroy()
 
     def on_cancel(self):
         self.selected_items = []
         self.result_action = None
+        
+        # 如果提供了回调函数，调用它并传递空结果
+        if self.callback:
+            self.callback([], None)
+            
         self.destroy()
 
 
@@ -1256,7 +1275,7 @@ class NovelManager:
 class NovelManagerGUI:
     def __init__(self, root, manager):
         self.root = root
-        self.root.title("网文创作助手 V3.3 (ai优化添加)")
+        self.root.title("网文创作助手 V3.2 (界面修复)")
         self.root.geometry("1300x850")
 
         self.manager = manager
@@ -2321,15 +2340,17 @@ class NovelManagerGUI:
         try:
             trash_items_paths = self.manager.list_trash()
         except Exception as e:
-            messagebox.showerror("错误", f"无法列出回收站内容:\n{e}", parent=self.root);
+            messagebox.showerror("错误", f"无法列出回收站内容:\n{e}", parent=self.root)
             return
 
-        dialog = TrashDialog(self.root, trash_items_paths)  # Uses Toplevel/ttk
-        items_to_process = dialog.selected_items
-        action = dialog.result_action
+        # 创建非模态对话框，传递回调函数
+        TrashDialog(self.root, trash_items_paths, callback=self.on_trash_action)
 
-        if not items_to_process or action is None: return  # Cancelled
-
+    def on_trash_action(self, items_to_process, action):
+        """回收站对话框操作的回调函数"""
+        if not items_to_process or action is None:
+            return  # 已取消操作
+            
         processed_count, errors, affected_categories = 0, [], set()
         action_verb = "恢复" if action == "restore" else "永久删除"
         restored_paths = []  # 记录恢复的路径
@@ -3171,7 +3192,11 @@ class NovelManagerGUI:
             theme_dialog.title("选择主题")
             theme_dialog.geometry("300x200")
             theme_dialog.transient(self.root)
-            theme_dialog.grab_set()
+            # 移除 grab_set 使对话框为非模态
+            # theme_dialog.grab_set()
+            
+            # 设置关闭窗口协议
+            theme_dialog.protocol("WM_DELETE_WINDOW", lambda: theme_dialog.destroy())
 
             # 获取当前主题颜色
             mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
@@ -3211,7 +3236,11 @@ class NovelManagerGUI:
             theme_dialog.title("选择主题")
             theme_dialog.geometry("250x150")
             theme_dialog.transient(self.root)
-            theme_dialog.grab_set()
+            # 移除 grab_set 使对话框为非模态
+            # theme_dialog.grab_set()
+            
+            # 设置关闭窗口协议
+            theme_dialog.protocol("WM_DELETE_WINDOW", lambda: theme_dialog.destroy())
 
             ttk.Label(theme_dialog, text="选择界面主题",
                       font=("Segoe UI", 12, "bold")).pack(pady=(10, 15))
@@ -3382,7 +3411,11 @@ class NovelManagerGUI:
             font_dialog.title("选择字体")
             font_dialog.geometry("550x600")  # 增大高度以容纳更多控件
             font_dialog.transient(self.root)
-            font_dialog.grab_set()
+            # 移除 grab_set 使对话框为非模态
+            # font_dialog.grab_set()
+            
+            # 设置关闭窗口协议
+            font_dialog.protocol("WM_DELETE_WINDOW", lambda: font_dialog.destroy())
 
             # 获取当前主题的柔和颜色
             mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
@@ -4202,9 +4235,20 @@ class NovelManagerGUI:
         try:
             # 获取AI引擎实例，如果不存在则初始化一个
             ai_engine = get_ai_engine()
-            # 显示配置对话框
-            config_dialog = ConfigDialog(self.root, ai_engine)
-            # 配置对话框是模态的，会阻塞直到关闭
+            
+            # 定义回调函数处理配置更新
+            def config_updated(config):
+                # 配置已更新，刷新界面
+                print("AI配置已更新，正在刷新界面...")
+                # 这里添加任何需要在配置更新后执行的代码
+                # 例如刷新UI状态或显示通知
+                messagebox.showinfo("配置已更新", "AI配置已成功更新！", parent=self.root)
+            
+            # 显示配置对话框，传递回调函数
+            config_dialog = ConfigDialog(self.root, ai_engine, callback=config_updated)
+            
+            # 由于对话框现在是非模态的，代码会继续执行，不会阻塞
+            
         except Exception as e:
             messagebox.showerror("AI配置错误", f"打开AI配置对话框时出错：\n{str(e)}", parent=self.root)
 
@@ -4224,24 +4268,74 @@ class NovelManagerGUI:
             # 获取AI引擎实例
             ai_engine = get_ai_engine()
 
-            # 无需预先判断配置状态，直接创建优化对话框
-            # 在优化对话框内部会处理未配置的情况
-            optimize_dialog = OptimizeDialog(self.root, ai_engine, content)
+            # 定义回调函数处理优化结果
+            def optimization_result_handler(result):
+                if not result:
+                    return
+                    
+                # 检查是否为字典格式的结果（保存为新条目的情况）
+                if isinstance(result, dict) and result.get('save_as_new'):
+                    # 保存为新条目
+                    optimized_content = result['content']
+                    
+                    # 获取当前条目的标题和分类
+                    current_title = self.title_var.get().strip()
+                    current_category = self.current_category
+                    
+                    if not current_title or not current_category:
+                        messagebox.showerror("错误", "无法确定当前条目的标题或分类。", parent=self.root)
+                        return
+                        
+                    # 构建新标题（添加-优化-XX后缀）
+                    base_title = current_title
+                    counter = 1
+                    while True:
+                        new_title = f"{base_title}-优化-{counter:02d}"
+                        # 检查是否已存在
+                        target_path = self.manager._get_entry_path(current_category, new_title)
+                        if not target_path.exists():
+                            break
+                        counter += 1
 
-            # 对话框关闭后，检查是否有结果需要应用到编辑器
-            if optimize_dialog.result:
-                # 如果用户点击了"应用到编辑器"按钮，将优化后的内容更新到编辑器
-                content_widget = getattr(self, 'content_text', None)
-                if content_widget and content_widget.winfo_exists():
-                    # 清空当前内容
-                    start_index = "0.0" if isinstance(content_widget, ctk.CTkTextbox) else "1.0"
-                    content_widget.delete(start_index, tk.END)
-                    # 插入优化后的内容
-                    content_widget.insert(tk.END, optimize_dialog.result)
-                    # 更新字数统计
-                    self._update_word_count()
-                    # 提示用户保存
-                    messagebox.showinfo("优化完成", "内容已更新，请记得保存更改。", parent=self.root)
+                    # 获取当前标签
+                    tags = self._get_tags_from_entry()
+
+                    try:
+                        # 保存新条目
+                        saved_path = self.manager.save_entry(
+                            current_category,
+                            new_title,
+                            optimized_content,
+                            tags
+                        )
+
+                        # 更新UI
+                        self.load_entries(current_category)
+                        self._select_listbox_item_by_text(self.entry_listbox, new_title)
+                        self.on_entry_select(None)  # 加载新条目
+
+                        messagebox.showinfo("保存成功", f"优化内容已保存为新条目：{new_title}", parent=self.root)
+                    except Exception as e:
+                        messagebox.showerror("保存错误", f"保存优化内容时出错：\n{str(e)}", parent=self.root)
+                else:
+                    # 直接更新编辑器内容
+                    content_widget = getattr(self, 'content_text', None)
+                    if content_widget and content_widget.winfo_exists():
+                        # 清空当前内容
+                        start_index = "0.0" if isinstance(content_widget, ctk.CTkTextbox) else "1.0"
+                        content_widget.delete(start_index, tk.END)
+                        # 插入优化后的内容
+                        content_widget.insert(tk.END, result)
+                        # 更新字数统计
+                        self._update_word_count()
+                        # 提示用户保存
+                        messagebox.showinfo("优化完成", "内容已更新，请记得保存更改。", parent=self.root)
+
+            # 创建优化对话框，传递回调函数
+            optimize_dialog = OptimizeDialog(self.root, ai_engine, content, callback=optimization_result_handler)
+            
+            # 由于对话框现在是非模态的，代码会继续执行，不会阻塞
+
         except Exception as e:
             messagebox.showerror("AI优化错误", f"使用AI优化内容时出错：\n{str(e)}", parent=self.root)
 

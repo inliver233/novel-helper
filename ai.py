@@ -286,7 +286,7 @@ class AIEngine:
 class ConfigDialog:
     """AI配置对话框，用于设置AI引擎相关参数"""
 
-    def __init__(self, parent, ai_engine=None, config=None):
+    def __init__(self, parent, ai_engine=None, config=None, callback=None):
         """
         初始化配置对话框
 
@@ -294,9 +294,11 @@ class ConfigDialog:
             parent: 父窗口
             ai_engine: AI引擎实例，如果提供则会自动更新配置
             config: 初始配置字典
+            callback: 配置保存后的回调函数
         """
         self.parent = parent
         self.ai_engine = ai_engine
+        self.callback = callback
 
         # 如果传入AI引擎，则使用其配置，否则加载配置文件
         if ai_engine and hasattr(ai_engine, 'config'):
@@ -322,7 +324,11 @@ class ConfigDialog:
         self.dialog.title("AI模型配置")
         self.dialog.geometry("500x550")
         self.dialog.transient(self.parent)
-        self.dialog.grab_set()
+        # 移除 grab_set 使对话框为非模态
+        # self.dialog.grab_set()
+        
+        # 设置关闭窗口协议
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
         # 确保对话框居中显示
         self.dialog.update_idletasks()
@@ -335,8 +341,8 @@ class ConfigDialog:
         # 加载现有配置
         self._load_config()
 
-        # 等待对话框关闭
-        self.dialog.wait_window(self.dialog)
+        # 不再等待对话框关闭，允许与主窗口交互
+        # self.dialog.wait_window(self.dialog)
 
     def _create_ctk_ui(self):
         """创建CustomTkinter UI"""
@@ -473,19 +479,22 @@ class ConfigDialog:
         ctk.CTkButton(
             button_frame,
             text="测试连接",
-            command=self._test_connection
+            command=self._test_connection,
+            width=100
         ).pack(side=tk.LEFT)
 
         ctk.CTkButton(
             button_frame,
             text="取消",
-            command=self._on_cancel
+            command=self._on_cancel,
+            width=100
         ).pack(side=tk.RIGHT, padx=(10, 0))
 
         ctk.CTkButton(
             button_frame,
             text="保存",
-            command=self._on_save
+            command=self._on_save,
+            width=100
         ).pack(side=tk.RIGHT)
 
     def _create_tk_ui(self):
@@ -739,6 +748,10 @@ class ConfigDialog:
         # 保存到配置文件
         self._save_to_config_file(config)
 
+        # 调用回调函数
+        if self.callback:
+            self.callback(config)
+
         # 关闭对话框
         self.dialog.destroy()
 
@@ -776,7 +789,7 @@ class ConfigDialog:
 class OptimizeDialog:
     """内容优化对话框，用于优化小说内容"""
 
-    def __init__(self, parent, ai_engine, content=None):
+    def __init__(self, parent, ai_engine, content=None, callback=None):
         """
         初始化优化对话框
 
@@ -784,12 +797,14 @@ class OptimizeDialog:
             parent: 父窗口
             ai_engine: AI引擎实例
             content: 初始内容
+            callback: 回调函数，用于将优化结果返回给父窗口
         """
         self.parent = parent
         self.ai_engine = ai_engine
         self.initial_content = content or ""
         self.result = None
         self.optimized_result = None
+        self.callback = callback
 
         # 创建对话框（不论是否配置了AI引擎）
         self._create_dialog()
@@ -806,7 +821,11 @@ class OptimizeDialog:
         self.dialog.title("内容优化")
         self.dialog.geometry("900x700")
         self.dialog.transient(self.parent)
-        self.dialog.grab_set()
+        # 移除 grab_set 使对话框为非模态
+        # self.dialog.grab_set()
+
+        # 设置关闭窗口协议
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # 确保对话框居中显示
         self.dialog.update_idletasks()
@@ -840,8 +859,8 @@ class OptimizeDialog:
                 )
                 warning_label.pack(side=tk.TOP, pady=5)
 
-        # 等待对话框关闭
-        self.dialog.wait_window(self.dialog)
+        # 不再等待对话框关闭，允许与主窗口交互
+        # self.dialog.wait_window(self.dialog)
 
     def _create_ctk_ui(self):
         """创建CustomTkinter UI"""
@@ -1059,6 +1078,13 @@ class OptimizeDialog:
             button_frame,
             text="应用结果",
             command=self._on_apply_result
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # 保存为新条目按钮
+        ctk.CTkButton(
+            button_frame,
+            text="保存为新条目",
+            command=self._on_save_as_new
         ).pack(side=tk.LEFT)
 
         # 添加右侧面板到分栏
@@ -1300,6 +1326,13 @@ class OptimizeDialog:
             button_frame,
             text="应用结果",
             command=self._on_apply_result
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # 保存为新条目按钮
+        ttk.Button(
+            button_frame,
+            text="保存为新条目",
+            command=self._on_save_as_new
         ).pack(side=tk.LEFT)
 
         # 添加右侧面板到分栏
@@ -1549,10 +1582,45 @@ class OptimizeDialog:
             # 更新UI
             self._set_content(result)
 
+            # 如果提供了回调函数，将结果传递给父窗口
+            if self.callback:
+                self.callback(result)
+
             messagebox.showinfo("应用成功", "已将优化结果应用到原始内容", parent=self.dialog)
+
+    def _on_save_as_new(self):
+        """当点击保存为新条目按钮时的处理"""
+        result = self._get_result()
+
+        if not result:
+            messagebox.showwarning("警告", "没有可保存的优化结果", parent=self.dialog)
+            return
+
+        # 确认是否保存为新条目
+        if messagebox.askyesno("确认保存", "确定要将优化结果保存为新条目吗？", parent=self.dialog):
+            # 创建包含保存标志的字典结果
+            self.result = {
+                'content': result,
+                'save_as_new': True
+            }
+
+            # 如果提供了回调函数，将结果传递给父窗口
+            if self.callback:
+                self.callback(self.result)
+                
+            messagebox.showinfo("操作成功", "已将优化结果传递给主程序，将保存为新条目", parent=self.dialog)
+            self.dialog.destroy()
 
     def _on_close(self):
         """当点击关闭按钮时的处理"""
+        # 如果有优化结果但未应用，提醒用户
+        if self.optimized_result and not self.result:
+            if messagebox.askyesno("关闭确认", "有未应用的优化结果，是否在关闭前应用？", parent=self.dialog):
+                self.result = self.optimized_result
+                # 如果提供了回调函数，将结果传递给父窗口
+                if self.callback:
+                    self.callback(self.result)
+                
         self.dialog.destroy()
 
 
