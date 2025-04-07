@@ -47,6 +47,23 @@ class AIEngine:
 
     def _setup_logging(self):
         """设置日志"""
+        # 尝试使用全局日志系统
+        try:
+            import log
+            # 如果导入成功，使用全局日志管理器
+            log_manager = log.get_log_manager()
+            self.logger = log_manager.get_logger()
+            # 记录AI引擎初始化日志
+            self.logger.info("AI引擎初始化")
+            return
+        except ImportError:
+            # 如果导入失败，使用标准日志设置
+            pass
+        except Exception as e:
+            # 如果出现其他错误，回退到标准日志设置
+            print(f"使用全局日志系统时出错: {e}")
+            
+        # 标准日志设置（当无法使用log.py时）
         handler = logging.StreamHandler()
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         handler.setFormatter(formatter)

@@ -1282,6 +1282,19 @@ class NovelManagerGUI:
         self.font_manager = FontManager()  # 创建字体管理器实例
         self.current_font = self.font_manager.current_font  # 当前字体
         self.font_size = 15  # 默认字体大小
+        
+        # 初始化日志系统
+        try:
+            import log
+            self.log_manager = log.get_log_manager()
+            self.log_manager.info("网文创作助手已启动")
+        except ImportError:
+            # 如果导入失败，程序仍会正常运行
+            print("日志模块未找到，将不会记录操作日志")
+            self.log_manager = None
+        except Exception as e:
+            print(f"初始化日志系统时出错: {e}")
+            self.log_manager = None
 
         # --- Theme and Color Setup ---
         self.current_theme_mode = "system"
@@ -2037,187 +2050,202 @@ class NovelManagerGUI:
             messagebox.showinfo("编辑条目", "请选择单个条目进行编辑。", parent=self.root)
 
     def on_save(self):
-        """根据当前情况决定使用哪个保存方法"""
-        # 检查是否有选择事件来源
-        if getattr(self, 'save_source', None) == "update":
-            # 使用保存修改
-            self.on_save_update()
-        else:
-            # 使用另存为新建
-            self.on_save_as_new()
+        """保存按钮点击处理器（自动判断是更新还是新建）"""
+        return self._set_save_source_and_save("auto")
+
+    def _set_save_source_and_save(self, save_source):
+        """设置保存来源并保存"""
+        result = self.on_save_update() if save_source in ["update", "auto"] else self.on_save_as_new()
+        
+        # 记录日志
+        if self.log_manager:
+            operation = "更新" if save_source in ["update", "auto"] else "新建"
+            if result:
+                self.log_manager.info(f"成功{operation}条目")
+            else:
+                self.log_manager.warning(f"{operation}条目失败")
+                
+        return result
 
     def on_delete_selected_entries(self):
-        """Move selected entries to trash."""
-        listbox = getattr(self, 'entry_listbox', None)
-        if not listbox or not listbox.curselection():
-            messagebox.showwarning("选择条目", "请先在列表中选择一个或多个要删除的条目。", parent=self.root)
-            return
+        """删除选中的条目"""
+        if not self.entry_listbox or not hasattr(self.entry_listbox, 'curselection'):
+            return False
 
-        items_to_delete, titles_to_delete, paths_being_deleted = [], [], set()
-        selected_indices = listbox.curselection()
+        # Get selected entry
+        selected_indices = self.entry_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo("提示", "请先选择要删除的条目", parent=self.root)
+            return False
 
-        for index in selected_indices:
-            try:
-                display_text = listbox.get(index)
-                if display_text.startswith("("): continue  # Skip placeholders
-            except (tk.TclError, IndexError):
-                continue  # Skip if index is invalid
+        # Get titles of selected entries
+        selected_titles = [self.entry_listbox.get(i) for i in selected_indices]
+        
+        # Skip non-entries from UI placeholder text
+        valid_titles = [title for title in selected_titles if title not in ["(无条目)", "(请先选择分类)", "(加载错误)", "无匹配结果"]]
+        if not valid_titles:
+            messagebox.showinfo("提示", "没有可删除的有效条目", parent=self.root)
+            return False
 
-            entry_path = self.entry_data_map.get(display_text)
-            path_valid = False
-            if entry_path:
-                try:
-                    path_valid = Path(entry_path).is_file()
-                except Exception:
-                    pass
+        # Confirm deletion
+        confirmation_message = f"确定要删除以下条目吗？\n\n" + "\n".join(valid_titles)
+        if not messagebox.askyesno("确认删除", confirmation_message, parent=self.root):
+            return False
 
-            if path_valid:
-                items_to_delete.append({"title": display_text, "path": entry_path})
-                titles_to_delete.append(f"'{display_text}'")
-                paths_being_deleted.add(entry_path)
-            else:
-                print(f"Warning: Skipping delete for invalid item '{display_text}' (path: {entry_path})")
+        # Delete each entry
+        success_count = 0
+        error_messages = []
 
-        if not items_to_delete:
-            if len(selected_indices) > 0:  # User selected only placeholders
-                messagebox.showwarning("无效选择", "选中的项目无法删除。", parent=self.root)
-            return
+        for title in valid_titles:
+            # Handle search results (format: "[Category] Title")
+            if self.is_search_active and "[" in title and "]" in title:
+                parts = title.split("] ", 1)
+                if len(parts) > 1:
+                    title = parts[1]  # Extract actual title
 
-        num = len(items_to_delete)
-        title_str = "\n - " + "\n - ".join(titles_to_delete) if num <= 5 else f"\n({num}个条目)"
-        if messagebox.askyesno("确认移至回收站", f"确定要将以下条目移到回收站吗？\n{title_str}", icon='warning',
-                               parent=self.root):
-            deleted_count, errors = 0, []
-            for item in items_to_delete:
-                try:
-                    if self.manager.delete_entry(item["path"]): deleted_count += 1
-                except Exception as e:
-                    errors.append(f"'{item['title']}': {e}")
-
-            # Refresh UI
-            editor_cleared = False
-            if self.current_entry_path in paths_being_deleted:
-                self.clear_editor()
-                editor_cleared = True
-
-            if deleted_count > 0:
-                if self.is_search_active:
-                    self.on_search()
-                elif self.current_category:
-                    self.load_entries(self.current_category)
-                else:
-                    self.load_entries(None)  # Should be empty view if category was deleted
-
-            if errors:
-                messagebox.showerror("删除错误", "移动部分条目到回收站时出错:\n" + "\n".join(errors), parent=self.root)
-            elif deleted_count > 0:
-                # Only show success if no errors occurred or be more specific
-                if not errors:
-                    messagebox.showinfo("成功", f"{deleted_count} 个条目已移到回收站。", parent=self.root)
-                else:
-                    messagebox.showwarning("部分成功",
-                                           f"{deleted_count} 个条目已移到回收站，但有 {len(errors)} 个发生错误。",
-                                           parent=self.root)
-
-    def on_move_selected_entries(self):
-        """Move selected entries to another category."""
-        listbox = getattr(self, 'entry_listbox', None)
-        if not listbox or not listbox.curselection():
-            messagebox.showwarning("选择条目", "请先选择一个或多个要移动的条目。", parent=self.root)
-            return
-
-        items_to_move, titles_to_move, source_categories, paths_being_moved = [], [], set(), set()
-        selected_indices = listbox.curselection()
-
-        for index in selected_indices:
-            try:
-                display_text = listbox.get(index)
-                if display_text.startswith("("): continue
-            except (tk.TclError, IndexError):
+            # Get file path from data map
+            file_path = self.entry_data_map.get(title)
+            if not file_path:
+                error_messages.append(f"找不到条目 '{title}' 的文件路径")
                 continue
 
-            entry_path_str = self.entry_data_map.get(display_text)
-            path_valid = False
-            entry_path_obj = None
-            if entry_path_str:
-                try:
-                    entry_path_obj = Path(entry_path_str)
-                    if entry_path_obj.is_file(): path_valid = True
-                except Exception:
-                    pass
+            try:
+                # Delete the entry
+                if self.manager.delete_entry(file_path):
+                    success_count += 1
+                    
+                    # 记录日志
+                    if self.log_manager:
+                        self.log_manager.info(f"已删除条目: {title}")
+                else:
+                    error_messages.append(f"删除条目 '{title}' 失败")
+                    
+                    # 记录日志
+                    if self.log_manager:
+                        self.log_manager.error(f"删除条目失败: {title}")
+            except Exception as e:
+                error_messages.append(f"删除条目 '{title}' 出错: {e}")
+                
+                # 记录日志
+                if self.log_manager:
+                    self.log_manager.error(f"删除条目出错: {title} - {e}")
 
-            if path_valid:
-                items_to_move.append({"title": display_text, "path": entry_path_str})
-                titles_to_move.append(f"'{display_text}'")
-                source_categories.add(entry_path_obj.parent.name)
-                paths_being_moved.add(entry_path_str)
+        # Reload entries
+        self.load_entries(self.current_category)
+
+        # Clear editor if current entry was deleted
+        if self.current_entry_path and any(self.current_entry_path == self.entry_data_map.get(title) for title in valid_titles):
+            self.clear_editor()
+
+        # Show result message
+        if success_count > 0:
+            if error_messages:
+                messagebox.showwarning("部分删除成功", 
+                                     f"成功删除了 {success_count}/{len(valid_titles)} 个条目。\n\n错误信息:\n" + "\n".join(error_messages),
+                                     parent=self.root)
             else:
-                print(f"Warning: Skipping move for invalid item '{display_text}' (path: {entry_path_str})")
+                messagebox.showinfo("删除成功", f"成功删除了 {success_count} 个条目", parent=self.root)
+            return True
+        else:
+            messagebox.showerror("删除失败", "没有条目被删除。\n\n错误信息:\n" + "\n".join(error_messages), parent=self.root)
+            return False
 
-        if not items_to_move:
-            if len(selected_indices) > 0:
-                messagebox.showwarning("无效选择", "选中的项目无法移动。", parent=self.root)
-            return
+    def on_move_selected_entries(self):
+        """移动选中的条目到其他分类"""
+        if not self.entry_listbox or not hasattr(self.entry_listbox, 'curselection'):
+            return False
 
-        # Determine current category for dialog (use single source if applicable)
-        dialog_current_category = list(source_categories)[0] if len(source_categories) == 1 else None
-        # Pass available categories, excluding the 'current' one for the dialog's dropdown logic
-        available_cats = self.manager.categories
-        dialog = MoveEntryDialog(self.root, available_cats, dialog_current_category)
-        target_category = dialog.result
+        # Get selected entries
+        selected_indices = self.entry_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo("提示", "请先选择要移动的条目", parent=self.root)
+            return False
 
-        if target_category:
-            if len(source_categories) == 1 and target_category == list(source_categories)[0]:
-                messagebox.showinfo("无需移动", "目标分类与源分类相同。", parent=self.root);
-                return
+        # Get titles of selected entries
+        selected_titles = [self.entry_listbox.get(i) for i in selected_indices]
+        valid_titles = [title for title in selected_titles if title not in ["(无条目)", "(请先选择分类)", "(加载错误)", "无匹配结果"]]
+        if not valid_titles:
+            messagebox.showinfo("提示", "没有可移动的有效条目", parent=self.root)
+            return False
 
-            moved_count, errors = 0, []
-            was_new_category = target_category not in self.manager.categories
+        # Handle case where we're viewing search results
+        if self.is_search_active:
+            messagebox.showinfo("提示", "请先退出搜索模式，再进行移动操作", parent=self.root)
+            return False
 
-            for item in items_to_move:
-                try:
-                    new_path_str = self.manager.move_entry(item["path"], target_category)
-                    if new_path_str: moved_count += 1
-                except Exception as e:
-                    errors.append(f"移动 '{item['title']}': {e}")
+        # Get the source category
+        current_category = self.current_category
+        if not current_category or current_category not in self.manager.categories:
+            messagebox.showerror("错误", "当前分类无效，无法移动条目", parent=self.root)
+            return False
 
-            # Refresh UI
-            editor_path_updated = False
-            editor_cleared = False
-            if self.current_entry_path in paths_being_moved:
-                old_path_obj = Path(self.current_entry_path)
-                new_path_str = str(self.manager.root_dir / target_category / old_path_obj.name)
-                if Path(new_path_str).is_file():
-                    self.current_entry_path = new_path_str
-                    print(f"Editor path updated to: {new_path_str}")
-                    editor_path_updated = True
+        # Prepare list of available target categories (excluding current)
+        target_categories = [cat for cat in self.manager.categories if cat != current_category]
+        if not target_categories:
+            messagebox.showinfo("提示", "没有其他可用分类。请先创建至少一个额外分类。", parent=self.root)
+            return False
+
+        # Create dialog to select target category
+        dialog = MoveEntryDialog(self.root, target_categories, current_category)
+        if not dialog.result:
+            return False  # User cancelled
+
+        target_category = dialog.result["category"]
+        if not target_category or target_category not in self.manager.categories:
+            messagebox.showerror("错误", f"目标分类 '{target_category}' 无效", parent=self.root)
+            return False
+
+        # Move each entry
+        success_count = 0
+        error_messages = []
+
+        for title in valid_titles:
+            try:
+                # Get source file path
+                source_path = self.entry_data_map.get(title)
+                if not source_path:
+                    error_messages.append(f"找不到条目 '{title}' 的文件路径")
+                    continue
+
+                # Move the entry
+                if self.manager.move_entry(source_path, target_category):
+                    success_count += 1
+                    
+                    # 记录日志
+                    if self.log_manager:
+                        self.log_manager.info(f"已移动条目: {title} 从 {current_category} 到 {target_category}")
                 else:
-                    self.clear_editor()  # Clear if new path invalid
-                    editor_cleared = True
+                    error_messages.append(f"移动条目 '{title}' 失败")
+                    
+                    # 记录日志
+                    if self.log_manager:
+                        self.log_manager.error(f"移动条目失败: {title}")
+            except Exception as e:
+                error_messages.append(f"移动条目 '{title}' 出错: {e}")
+                
+                # 记录日志
+                if self.log_manager:
+                    self.log_manager.error(f"移动条目出错: {title} - {e}")
 
-            # Reload category list if a new one was actually added by the move process
-            if was_new_category and target_category in self.manager.categories:
-                self.load_categories()
+        # Reload entries for current category
+        self.load_entries(self.current_category)
 
-            # Refresh entry list/search
-            if moved_count > 0:
-                if self.is_search_active:
-                    self.on_search()
-                elif self.current_category in source_categories:
-                    self.load_entries(self.current_category)
-                # Potentially switch to target category? Optional.
-                # elif self.current_category != target_category:
-                #      self._select_listbox_item_by_text(self.category_listbox, target_category)
-                #      self.on_category_select() # Load the target category
+        # Clear editor if current entry was moved
+        if self.current_entry_path and any(self.current_entry_path == self.entry_data_map.get(title) for title in valid_titles):
+            self.clear_editor()
 
-            if errors:
-                messagebox.showerror("移动错误", "移动过程中发生错误:\n" + "\n".join(errors), parent=self.root)
-            elif moved_count > 0:
-                if not errors:
-                    messagebox.showinfo("成功", f"{moved_count} 个条目已移动到 '{target_category}'。", parent=self.root)
-                else:
-                    messagebox.showwarning("部分成功", f"{moved_count} 个条目已移动，但有 {len(errors)} 个发生错误。",
-                                           parent=self.root)
+        # Show result message
+        if success_count > 0:
+            if error_messages:
+                messagebox.showwarning("部分移动成功", 
+                                     f"成功移动了 {success_count}/{len(valid_titles)} 个条目到 '{target_category}'。\n\n错误信息:\n" + "\n".join(error_messages),
+                                     parent=self.root)
+            else:
+                messagebox.showinfo("移动成功", f"成功移动了 {success_count} 个条目到 '{target_category}'", parent=self.root)
+            return True
+        else:
+            messagebox.showerror("移动失败", f"没有条目被移动到 '{target_category}'。\n\n错误信息:\n" + "\n".join(error_messages), parent=self.root)
+            return False
 
     def on_rename_entry(self):
         """Rename selected single entry."""
@@ -2674,41 +2702,24 @@ class NovelManagerGUI:
             # --- 顶部操作栏 ---
             top_button_frame = ctk.CTkFrame(frame, fg_color="transparent")
             top_button_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
-
-            # 主题切换按钮
+            
+            # 日志按钮
             mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
             colors = self.soft_colors[mode]
-
-            # --- AI功能按钮区域 ---
-            ai_frame = ctk.CTkFrame(frame, fg_color="transparent")
-            ai_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-            # AI配置按钮
-            ai_config_btn = ctk.CTkButton(
-                ai_frame,
-                text="AI配置",
-                width=85,
+            
+            log_button = ctk.CTkButton(
+                top_button_frame,
+                text="日志",
+                width=60,
                 font=("Microsoft YaHei UI", 15),
-                command=self.on_ai_config,
+                command=self.show_log_window,
                 fg_color=colors["button_blue"],
                 hover_color=colors["button_blue_hover"],
                 text_color=colors["list_select_fg"]
             )
-            ai_config_btn.pack(side=tk.LEFT, padx=(0, 5))
+            log_button.pack(side=tk.LEFT, padx=(0, 5))
 
-            # AI优化按钮
-            ai_optimize_btn = ctk.CTkButton(
-                ai_frame,
-                text="AI优化",
-                width=85,
-                font=("Microsoft YaHei UI", 15),
-                command=self.on_ai_optimize,
-                fg_color=colors["button_green"],
-                hover_color=colors["button_green_hover"],
-                text_color=colors["list_select_fg"]
-            )
-            ai_optimize_btn.pack(side=tk.LEFT)
-
+            # 主题切换按钮
             theme_button = ctk.CTkButton(
                 top_button_frame,
                 text="主题",
@@ -2773,8 +2784,38 @@ class NovelManagerGUI:
             )
             exit_button.pack(side=tk.RIGHT)
 
+            # --- AI功能按钮区域 ---
+            ai_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            ai_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+            # AI配置按钮
+            ai_config_btn = ctk.CTkButton(
+                ai_frame,
+                text="AI配置",
+                width=85,
+                font=("Microsoft YaHei UI", 15),
+                command=self.on_ai_config,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            )
+            ai_config_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+            # AI优化按钮
+            ai_optimize_btn = ctk.CTkButton(
+                ai_frame,
+                text="AI优化",
+                width=85,
+                font=("Microsoft YaHei UI", 15),
+                command=self.on_ai_optimize,
+                fg_color=colors["button_green"],
+                hover_color=colors["button_green_hover"],
+                text_color=colors["list_select_fg"]
+            )
+            ai_optimize_btn.pack(side=tk.LEFT)
+
             ctk.CTkLabel(frame, text="分类列表", font=("Microsoft YaHei UI", 16, "bold")).pack(pady=(10, 10), padx=10,
-                                                                                               anchor=tk.W)
+                                                                                                anchor=tk.W)
 
             list_frame = ctk.CTkFrame(frame, fg_color="transparent")
             list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
@@ -2841,9 +2882,14 @@ class NovelManagerGUI:
             # 添加顶部按钮框架
             top_button_frame = ttk.Frame(frame)
             top_button_frame.pack(fill=tk.X, pady=(0, 5))
+            
+            # 添加日志按钮
+            ttk.Button(top_button_frame, text="日志", width=8, 
+                      command=self.show_log_window).pack(side=tk.LEFT, padx=(0, 5))
 
             ttk.Button(top_button_frame, text="主题", width=8,
                        command=self._show_theme_dialog).pack(side=tk.LEFT, padx=(0, 5))
+
             ttk.Button(top_button_frame, text="回收站", width=10,
                        command=self.on_view_trash).pack(side=tk.LEFT, padx=(0, 5))
             ttk.Button(top_button_frame, text="清空回收站", width=12,
@@ -3004,6 +3050,184 @@ class NovelManagerGUI:
             ttk.Button(button_frame, text="新建", command=self.on_new_entry).pack(side=tk.LEFT, padx=(0, 5))
             ttk.Button(button_frame, text="重命名", command=self.on_rename_entry).pack(side=tk.LEFT, padx=(0, 5))
             ttk.Button(button_frame, text="删除", command=self.on_delete_selected_entries).pack(side=tk.LEFT)
+            return frame
+
+    def _create_right_pane(self, parent):
+        """创建编辑器面板"""
+        if HAS_CTK:
+            frame = ctk.CTkFrame(parent, corner_radius=0, border_width=0)  # 融入 PanedWindow
+
+            # --- 顶部编辑器框架 (标题、标签、信息) ---
+            editor_top_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            editor_top_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+            # 标题输入行
+            title_frame = ctk.CTkFrame(editor_top_frame, fg_color="transparent")
+            title_frame.pack(fill=tk.X, pady=(0, 8))  # 增加下方间距
+            ctk.CTkLabel(title_frame, text="标题:", width=50, font=("Microsoft YaHei UI", 13)).pack(side=tk.LEFT,
+                                                                                                    padx=(0, 8))
+            self.title_var = tk.StringVar()
+            title_entry = ctk.CTkEntry(title_frame, textvariable=self.title_var, font=("Microsoft YaHei UI", 13),
+                                       height=32)  # 微调高度
+            title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            # 标签输入行
+            tags_frame = ctk.CTkFrame(editor_top_frame, fg_color="transparent")
+            tags_frame.pack(fill=tk.X, pady=(0, 8))
+            ctk.CTkLabel(tags_frame, text="标签:", width=50, font=("Microsoft YaHei UI", 15)).pack(side=tk.LEFT,
+                                                                                                   padx=(0, 8))
+            self.tags_var = tk.StringVar()
+            tags_entry = ctk.CTkEntry(tags_frame, textvariable=self.tags_var, font=("Microsoft YaHei UI", 15),
+                                      height=30)
+            tags_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            ctk.CTkLabel(tags_frame, text="(逗号分隔)", font=("Microsoft YaHei UI", 10, "italic"),
+                         text_color="gray").pack(side=tk.LEFT, padx=(8, 0))
+
+            # 信息和字数统计行
+            info_stats_frame = ctk.CTkFrame(editor_top_frame, fg_color="transparent")
+            info_stats_frame.pack(fill=tk.X, pady=(0, 5))
+
+            # 信息标签 (创建/更新日期) - 增大字号
+            self.info_label_var = tk.StringVar(value="未加载条目")
+            info_label = ctk.CTkLabel(info_stats_frame, textvariable=self.info_label_var,
+                                      font=("Microsoft YaHei UI", 12), text_color="gray")
+            info_label.pack(side=tk.LEFT, fill=tk.X, pady=(5, 0))
+
+            # 字数统计行（单独一行）
+            stats_frame = ctk.CTkFrame(editor_top_frame, fg_color="transparent")
+            stats_frame.pack(fill=tk.X, pady=(0, 5))
+
+            # 新增：字数统计标签
+            self.word_count_var = tk.StringVar(value="字数: 0 | 英文: 0 | 符号: 0 | 字符: 0 | 行数: 0")
+            word_count_label = ctk.CTkLabel(stats_frame, textvariable=self.word_count_var,
+                                            font=("Microsoft YaHei UI", 12), text_color="gray")
+            word_count_label.pack(side=tk.LEFT, fill=tk.X, pady=(0, 5))
+
+            # --- 内容文本区域框架 ---
+            content_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(5, 5))
+
+            # 使用 CTkTextbox 作为内容编辑器，设置为深色背景
+            self.content_text = ctk.CTkTextbox(
+                content_frame,
+                wrap="word",  # 自动换行
+                font=("Microsoft YaHei UI", 13),  # 稍大字体
+                border_width=1,  # 设置边框宽度
+                fg_color="#2b2b2b",  # 与分类和条目列表一致的深灰色背景
+                text_color="white",  # 白色文字以提高可读性
+            )
+            self.content_text.pack(fill=tk.BOTH, expand=True)
+
+            # 绑定文本变更事件来更新字数统计
+            self.content_text.bind("<<Modified>>", self._update_word_count)
+
+            # 在FocusOut时也更新字数统计
+            self.content_text.bind("<FocusOut>", self._update_word_count)
+
+            # KeyRelease事件更新字数统计
+            self.content_text.bind("<KeyRelease>", self._update_word_count)
+
+            # --- 保存按钮框架 ---
+            save_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            save_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
+
+            # 获取当前主题的柔和颜色
+            mode = "dark" if ctk.get_appearance_mode().lower() == "dark" else "light"
+            colors = self.soft_colors[mode]
+
+            # 创建两个按钮：新建和保存
+            buttons_frame = ctk.CTkFrame(save_frame, fg_color="transparent")
+            buttons_frame.pack(fill=tk.X)
+
+            # 保存按钮（更新现有条目）
+            ctk.CTkButton(
+                buttons_frame,
+                text="保存修改",
+                command=lambda: self._set_save_source_and_save("update"),
+                font=("Microsoft YaHei UI", 14, "bold"),
+                height=40,
+                fg_color=colors["button_green"],
+                hover_color=colors["button_green_hover"],
+                text_color=colors["list_select_fg"]
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+
+            # 新建按钮
+            ctk.CTkButton(
+                buttons_frame,
+                text="另存为新建",
+                command=lambda: self._set_save_source_and_save("new"),
+                font=("Microsoft YaHei UI", 14, "bold"),
+                height=40,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            return frame
+
+        else:  # 回退到 ttk 实现
+            frame = ttk.Frame(parent, padding=5)
+            editor_top_frame = ttk.Frame(frame)
+            editor_top_frame.pack(fill=tk.X, pady=(0, 5))
+            # Title row
+            title_frame = ttk.Frame(editor_top_frame)
+            title_frame.pack(fill=tk.X, pady=(0, 3))
+            ttk.Label(title_frame, text="标题:", width=6).pack(side=tk.LEFT, padx=(0, 5))
+            self.title_var = tk.StringVar()
+            ttk.Entry(title_frame, textvariable=self.title_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            # Tags row
+            tags_frame = ttk.Frame(editor_top_frame)
+            tags_frame.pack(fill=tk.X, pady=(0, 3))
+            ttk.Label(tags_frame, text="标签:", width=6).pack(side=tk.LEFT, padx=(0, 5))
+            self.tags_var = tk.StringVar()
+            ttk.Entry(tags_frame, textvariable=self.tags_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            ttk.Label(tags_frame, text="(逗号分隔)", font=("", 8, "italic")).pack(side=tk.LEFT, padx=(5, 0))
+
+            # 信息行
+            info_frame = ttk.Frame(editor_top_frame)
+            info_frame.pack(fill=tk.X, pady=(3, 0))
+
+            # Info Label - 增大字号
+            self.info_label_var = tk.StringVar(value="未加载条目")
+            info_label = ttk.Label(info_frame, textvariable=self.info_label_var, font=("", 10), foreground="gray")
+            info_label.pack(side=tk.LEFT, fill=tk.X)
+
+            # 新增：字数统计标签（单独一行）
+            stats_frame = ttk.Frame(editor_top_frame)
+            stats_frame.pack(fill=tk.X, pady=(3, 0))
+            self.word_count_var = tk.StringVar(value="字数: 0 | 英文: 0 | 符号: 0 | 字符: 0 | 行数: 0")
+            word_count_label = ttk.Label(stats_frame, textvariable=self.word_count_var, font=("", 10),
+                                         foreground="gray")
+            word_count_label.pack(side=tk.LEFT, fill=tk.X)
+
+            # Content Area Frame
+            content_frame = ttk.Frame(frame)
+            content_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 5))
+            editor_scrollbar = ttk.Scrollbar(content_frame, orient=tk.VERTICAL)
+            # 使用 tk.Text 以支持 undo 功能
+            self.content_text = tk.Text(content_frame, wrap="word", relief=tk.FLAT, borderwidth=1, undo=True,
+                                        yscrollcommand=editor_scrollbar.set)
+            editor_scrollbar.config(command=self.content_text.yview)
+            editor_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            self.content_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            # 绑定文本变更事件来更新字数统计
+            self.content_text.bind("<<Modified>>", self._update_word_count)
+
+            # 在FocusOut时也更新字数统计
+            self.content_text.bind("<FocusOut>", self._update_word_count)
+
+            # KeyRelease事件更新字数统计
+            self.content_text.bind("<KeyRelease>", self._update_word_count)
+
+            # 按钮区域 - 分为保存修改和另存为新建两个按钮
+            buttons_frame = ttk.Frame(frame)
+            buttons_frame.pack(fill=tk.X, pady=(5, 0))
+            ttk.Button(buttons_frame, text="保存修改", command=lambda: self._set_save_source_and_save("update")).pack(
+                side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+            ttk.Button(buttons_frame, text="另存为新建", command=lambda: self._set_save_source_and_save("new")).pack(
+                side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+
             return frame
 
     def _create_right_pane(self, parent):
@@ -3427,7 +3651,6 @@ class NovelManagerGUI:
 
             ctk.CTkLabel(top_frame, text="选择字体",
                          font=(DIALOG_FONT, DIALOG_TITLE_SIZE, "bold")).pack(pady=(0, 15))
-
             # 字体来源选择
             source_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
             source_frame.pack(fill=tk.X, pady=(0, 15))
@@ -3815,11 +4038,9 @@ class NovelManagerGUI:
 
     # 在程序退出时保存设置
     def on_close(self):
-        """程序关闭时的处理"""
-        # 保存字体设置
-        if hasattr(self, 'font_manager'):
-            self.font_manager.save_settings()
-        # 退出程序
+        """关闭窗口时的处理"""
+        if self.log_manager:
+            self.log_manager.info("网文创作助手已关闭")
         self.root.quit()
 
     # --- 在 NovelManagerGUI 类中添加新方法 ---
@@ -4339,6 +4560,17 @@ class NovelManagerGUI:
         except Exception as e:
             messagebox.showerror("AI优化错误", f"使用AI优化内容时出错：\n{str(e)}", parent=self.root)
 
+    def show_log_window(self):
+        """显示日志窗口"""
+        try:
+            # 尝试导入日志模块
+            import log
+            log.show_log_window(self.root)
+        except ImportError:
+            messagebox.showinfo("提示", "日志模块未找到，请确保log.py文件存在。", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("错误", f"打开日志窗口时出错: {e}", parent=self.root)
+
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -4376,3 +4608,4 @@ if __name__ == "__main__":
     root.mainloop()
 
 # --- END OF FILE 小说助手_完整修复版.py ---
+
