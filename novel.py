@@ -1287,14 +1287,17 @@ class NovelManagerGUI:
         try:
             import log
             self.log_manager = log.get_log_manager()
+            self.logger = self.log_manager.get_logger()  # 添加logger属性
             self.log_manager.info("网文创作助手已启动")
         except ImportError:
             # 如果导入失败，程序仍会正常运行
             print("日志模块未找到，将不会记录操作日志")
             self.log_manager = None
+            self.logger = None  # 添加logger属性为None
         except Exception as e:
             print(f"初始化日志系统时出错: {e}")
             self.log_manager = None
+            self.logger = None  # 添加logger属性为None
 
         # --- Theme and Color Setup ---
         self.current_theme_mode = "system"
@@ -1565,6 +1568,11 @@ class NovelManagerGUI:
             self.theme_menu.add_command(label="暗色", command=lambda: self.switch_theme("dark"))
         else:
             self.theme_menu.add_command(label="默认", command=None, state=tk.DISABLED)
+            
+        # 添加分隔线
+        self.view_menu.add_separator()
+        # 添加AI精简按钮
+        self.view_menu.add_command(label="AI小说精简...", command=self.on_ai_condenser)
 
         # Apply initial menu colors AFTER all menus are created and assigned
         self._apply_menu_colors()
@@ -2801,6 +2809,19 @@ class NovelManagerGUI:
             )
             ai_config_btn.pack(side=tk.LEFT, padx=(0, 5))
 
+            # AI精简按钮
+            ai_condenser_btn = ctk.CTkButton(
+                ai_frame,
+                text="AI精简",
+                width=85,
+                font=("Microsoft YaHei UI", 15),
+                command=self.on_ai_condenser,
+                fg_color=colors["button_blue"],
+                hover_color=colors["button_blue_hover"],
+                text_color=colors["list_select_fg"]
+            )
+            ai_condenser_btn.pack(side=tk.LEFT, padx=(0, 5))
+            
             # AI优化按钮
             ai_optimize_btn = ctk.CTkButton(
                 ai_frame,
@@ -2875,6 +2896,9 @@ class NovelManagerGUI:
 
             # AI配置按钮
             ttk.Button(ai_frame, text="AI配置", width=10, command=self.on_ai_config).pack(side=tk.LEFT, padx=(0, 5))
+            
+            # AI精简按钮
+            ttk.Button(ai_frame, text="AI精简", width=10, command=self.on_ai_condenser).pack(side=tk.LEFT, padx=(0, 5))
 
             # AI优化按钮
             ttk.Button(ai_frame, text="AI优化", width=10, command=self.on_ai_optimize).pack(side=tk.LEFT)
@@ -4570,6 +4594,43 @@ class NovelManagerGUI:
             messagebox.showinfo("提示", "日志模块未找到，请确保log.py文件存在。", parent=self.root)
         except Exception as e:
             messagebox.showerror("错误", f"打开日志窗口时出错: {e}", parent=self.root)
+
+    # 在NovelManagerGUI类的末尾添加AI精简方法
+    def on_ai_condenser(self):
+        """打开AI小说精简工具窗口"""
+        if not HAS_AI:
+            messagebox.showwarning("功能不可用", "AI功能模块未找到，请确保ai.py文件存在且可导入。", parent=self.root)
+            return
+
+        try:
+            # 导入condenser模块
+            try:
+                # 使用绝对导入
+                import condenser
+                from condenser import CondenserWindow
+            except ImportError as e:
+                self.logger.error(f"导入condenser模块时出错: {e}")
+                messagebox.showerror("导入错误", f"无法导入AI精简模块：\n{str(e)}", parent=self.root)
+                return
+                
+            # 获取AI引擎实例
+            ai_engine = get_ai_engine()
+            
+            # 获取日志管理器
+            try:
+                # 使用绝对导入
+                import log
+                log_manager = log.get_log_manager()
+            except ImportError as e:
+                self.logger.error(f"导入log模块时出错: {e}")
+                messagebox.showerror("导入错误", f"无法导入日志模块：\n{str(e)}", parent=self.root)
+                return
+                
+            # 创建精简工具窗口
+            condenser_window = CondenserWindow(self.root, ai_engine, log_manager)
+            
+        except Exception as e:
+            messagebox.showerror("AI精简错误", f"打开AI精简工具时出错：\n{str(e)}", parent=self.root)
 
 
 # --- Main Execution ---
