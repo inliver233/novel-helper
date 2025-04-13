@@ -27,6 +27,180 @@ except ImportError:
 # 全局变量
 _ai_engine_instance = None
 _config_path = Path("config/ai_config.json")
+_profiles_dir = Path("config/profiles")
+_current_profile_path = Path("config/current_profile.txt")
+
+
+# === 配置档案管理函数 ===
+
+def get_profile_dir() -> Path:
+    """获取配置档案目录路径，如果不存在则创建"""
+    profiles_dir = _profiles_dir
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    return profiles_dir
+
+
+def list_profiles() -> List[str]:
+    """
+    列出所有可用的配置档案
+
+    Returns:
+        配置名称列表(不含.json后缀)
+    """
+    profiles_dir = get_profile_dir()
+    profiles = [f.stem for f in profiles_dir.glob("*.json")]
+
+    # 确保总是有一个"default"配置
+    if "default" not in profiles and len(profiles) == 0:
+        # 创建默认配置
+        default_config = {
+            "provider": "OpenAI",
+            "model_name": "gpt-3.5-turbo",
+            "api_key": "",
+            "api_url": "https://api.openai.com/v1/chat/completions",
+            "max_tokens": 4000,
+            "temperature": 0.7,
+            "use_proxy": False,
+            "proxy_url": ""
+        }
+        save_profile("default", default_config)
+        profiles = ["default"]
+
+    return sorted(profiles)
+
+
+def get_current_profile_name() -> str:
+    """
+    获取当前使用的配置名称
+
+    Returns:
+        当前配置名称，如果未设置则返回'default'
+    """
+    if _current_profile_path.exists():
+        try:
+            with open(_current_profile_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except:
+            pass
+
+    # 如果未设置或读取失败，返回default
+    return "default"
+
+
+def set_current_profile(profile_name: str):
+    """
+    设置当前使用的配置名称
+
+    Args:
+        profile_name: 配置名称
+    """
+    try:
+        with open(_current_profile_path, "w", encoding="utf-8") as f:
+            f.write(profile_name)
+    except Exception as e:
+        print(f"设置当前配置文件时出错: {e}")
+
+
+def load_profile(profile_name: str) -> Dict:
+    """
+    加载特定配置档案
+
+    Args:
+        profile_name: 配置名称
+
+    Returns:
+        配置字典
+    """
+    profiles_dir = get_profile_dir()
+    profile_path = profiles_dir / f"{profile_name}.json"
+
+    # 默认配置
+    default_config = {
+        "provider": "OpenAI",
+        "model_name": "gpt-3.5-turbo",
+        "api_key": "",
+        "api_url": "https://api.openai.com/v1/chat/completions",
+        "max_tokens": 4000,
+        "temperature": 0.7,
+        "use_proxy": False,
+        "proxy_url": ""
+    }
+
+    # 如果配置文件存在，加载它
+    if profile_path.exists():
+        try:
+            with open(profile_path, "r", encoding="utf-8") as f:
+                loaded_config = json.load(f)
+                # 更新默认配置，保留必要的字段
+                for key, value in loaded_config.items():
+                    if value is not None or key not in default_config:
+                        default_config[key] = value
+                print(f"已加载配置档案: {profile_name}")
+        except Exception as e:
+            print(f"加载配置档案 {profile_name} 时出错: {e}")
+    else:
+        # 如果配置不存在，创建一个空的默认配置
+        save_profile(profile_name, default_config)
+        print(f"已创建新的配置档案: {profile_name}")
+
+    return default_config
+
+
+def save_profile(profile_name: str, config: Dict):
+    """
+    保存配置到特定档案
+
+    Args:
+        profile_name: 配置名称
+        config: 配置字典
+    """
+    profiles_dir = get_profile_dir()
+    profile_path = profiles_dir / f"{profile_name}.json"
+
+    try:
+        with open(profile_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        print(f"配置已保存到档案: {profile_name}")
+    except Exception as e:
+        print(f"保存配置档案 {profile_name} 时出错: {e}")
+        raise
+
+
+def delete_profile(profile_name: str) -> bool:
+    """
+    删除配置档案
+
+    Args:
+        profile_name: 配置名称
+
+    Returns:
+        是否成功删除
+    """
+    # 不允许删除default配置
+    if profile_name == "default":
+        print("不允许删除默认配置档案")
+        return False
+
+    profiles_dir = get_profile_dir()
+    profile_path = profiles_dir / f"{profile_name}.json"
+
+    if profile_path.exists():
+        try:
+            profile_path.unlink()
+            print(f"已删除配置档案: {profile_name}")
+
+            # 如果删除的是当前配置，切换到default
+            current = get_current_profile_name()
+            if current == profile_name:
+                set_current_profile("default")
+
+            return True
+        except Exception as e:
+            print(f"删除配置档案 {profile_name} 时出错: {e}")
+            return False
+    else:
+        print(f"配置档案不存在: {profile_name}")
+        return False
 
 
 class AIEngine:
@@ -317,13 +491,18 @@ class ConfigDialog:
         self.ai_engine = ai_engine
         self.callback = callback
 
+        # 配置档案相关
+        self.profiles = list_profiles()
+        self.current_profile_name = get_current_profile_name()
+        self.profile_var = tk.StringVar(value=self.current_profile_name)
+
         # 如果传入AI引擎，则使用其配置，否则加载配置文件
         if ai_engine and hasattr(ai_engine, 'config'):
             self.config = ai_engine.config.copy()
         elif config:
             self.config = config.copy()
         else:
-            self.config = load_ai_config()
+            self.config = load_ai_config(self.current_profile_name)
 
         self.result = None
 
@@ -331,6 +510,15 @@ class ConfigDialog:
 
     def _create_dialog(self):
         """创建对话框界面"""
+        # 确保应用正确的主题设置
+        if HAS_CTK:
+            try:
+                # 设置外观模式和颜色主题，与主应用保持一致
+                ctk.set_appearance_mode("System")  # 使用系统模式
+                ctk.set_default_color_theme("blue")  # 使用蓝色主题
+            except Exception as e:
+                print(f"设置CTK主题时出错: {e}")
+                
         if HAS_CTK:
             self.dialog = ctk.CTkToplevel(self.parent)
             self._create_ctk_ui()
@@ -369,6 +557,44 @@ class ConfigDialog:
         main_frame = ctk.CTkFrame(dialog)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
+        # 配置档案管理区域
+        profile_frame = ctk.CTkFrame(main_frame)
+        profile_frame.pack(fill=tk.X, pady=(0, 15))
+
+        ctk.CTkLabel(
+            profile_frame,
+            text="配置档案:",
+            font=ctk.CTkFont(size=14)
+        ).pack(side=tk.LEFT, padx=(0, 5), pady=10)
+
+        # 配置档案下拉选择框
+        profile_combobox = ctk.CTkComboBox(
+            profile_frame,
+            values=self.profiles,
+            variable=self.profile_var,
+            width=180,
+            command=self._on_profile_change
+        )
+        profile_combobox.pack(side=tk.LEFT, padx=5, pady=10)
+
+        # 配置档案管理按钮
+        btn_new = ctk.CTkButton(
+            profile_frame,
+            text="另存为...",
+            width=80,
+            command=self._save_as_new_profile
+        )
+        btn_new.pack(side=tk.LEFT, padx=5, pady=10)
+
+        btn_delete = ctk.CTkButton(
+            profile_frame,
+            text="删除",
+            width=60,
+            command=self._delete_current_profile,
+            fg_color="#E74C3C"  # 红色按钮
+        )
+        btn_delete.pack(side=tk.LEFT, padx=5, pady=10)
+
         # 标题
         ctk.CTkLabel(
             main_frame,
@@ -376,7 +602,33 @@ class ConfigDialog:
             font=ctk.CTkFont(size=18, weight="bold")
         ).pack(pady=(0, 20))
 
-        # 创建选项卡
+        # 底部按钮 (移到选项卡之前创建和pack)
+        button_frame = ctk.CTkFrame(main_frame)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(20, 0))
+
+        ctk.CTkButton(
+            button_frame,
+            text="测试连接",
+            command=self._test_connection,
+            width=100
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        ctk.CTkButton(
+            button_frame,
+            text="取消",
+            command=self._on_cancel,
+            width=100,
+            fg_color="gray"
+        ).pack(side=tk.RIGHT, padx=(10, 0))
+
+        ctk.CTkButton(
+            button_frame,
+            text="保存",
+            command=self._on_save,
+            width=100
+        ).pack(side=tk.RIGHT)
+
+        # 创建选项卡 (在按钮框架之后pack，使其填充剩余空间)
         tab_view = ctk.CTkTabview(main_frame)
         tab_view.pack(fill=tk.BOTH, expand=True)
 
@@ -385,64 +637,96 @@ class ConfigDialog:
         advanced_tab = tab_view.add("高级设置")
 
         # === 通用配置标签页 ===
+        # 使用更合适的布局，从grid改为更简洁的垂直布局
         general_frame = ctk.CTkFrame(general_tab)
         general_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # 模型提供商
-        ctk.CTkLabel(general_frame, text="模型提供商:").pack(anchor=tk.W, pady=(10, 5))
-
+        provider_row = ctk.CTkFrame(general_frame)
+        provider_row.pack(fill=tk.X, pady=(5, 10))
+        
+        ctk.CTkLabel(
+            provider_row, 
+            text="模型提供商:",
+            width=80
+        ).pack(side=tk.LEFT, padx=(5, 10))
+        
         self.provider_var = tk.StringVar()
         provider_combo = ctk.CTkComboBox(
-            general_frame,
+            provider_row,
             values=["OpenAI", "智谱AI", "讯飞星火", "百度文心", "硅基流动", "自定义"],
             variable=self.provider_var,
-            width=350
+            width=200,
+            state="readonly"
         )
-        provider_combo.pack(fill=tk.X, pady=(0, 15))
+        provider_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # API密钥
-        ctk.CTkLabel(general_frame, text="API密钥:").pack(anchor=tk.W, pady=(0, 5))
-
+        api_key_label_frame = ctk.CTkFrame(general_frame)
+        api_key_label_frame.pack(fill=tk.X, pady=(5, 2))
+        
+        ctk.CTkLabel(
+            api_key_label_frame, 
+            text="API密钥:"
+        ).pack(side=tk.LEFT, padx=5)
+        
         key_frame = ctk.CTkFrame(general_frame)
-        key_frame.pack(fill=tk.X, pady=(0, 15))
-
+        key_frame.pack(fill=tk.X, pady=(0, 10))
+        
         self.api_key_var = tk.StringVar()
         self.api_key_entry = ctk.CTkEntry(
             key_frame,
             textvariable=self.api_key_var,
-            show="*",
-            width=300
+            show="*"
         )
-        self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
+        self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+        
         self.show_key_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             key_frame,
             text="显示",
             variable=self.show_key_var,
             command=self._toggle_key_visibility,
-            width=20
-        ).pack(side=tk.RIGHT, padx=(10, 0))
+            width=60
+        ).pack(side=tk.RIGHT, padx=(5, 5))
 
         # API URL
-        ctk.CTkLabel(general_frame, text="API URL:").pack(anchor=tk.W, pady=(0, 5))
-
+        api_url_label_frame = ctk.CTkFrame(general_frame)
+        api_url_label_frame.pack(fill=tk.X, pady=(5, 2))
+        
+        ctk.CTkLabel(
+            api_url_label_frame, 
+            text="API URL:"
+        ).pack(side=tk.LEFT, padx=5)
+        
+        api_url_frame = ctk.CTkFrame(general_frame)
+        api_url_frame.pack(fill=tk.X, pady=(0, 10))
+        
         self.api_url_var = tk.StringVar()
         ctk.CTkEntry(
-            general_frame,
+            api_url_frame,
             textvariable=self.api_url_var,
-            width=350
-        ).pack(fill=tk.X, pady=(0, 15))
+            placeholder_text="https://api.openai.com/v1/chat/completions"
+        ).pack(fill=tk.X, padx=5)
 
         # 模型名称
-        ctk.CTkLabel(general_frame, text="模型名称:").pack(anchor=tk.W, pady=(0, 5))
-
+        model_label_frame = ctk.CTkFrame(general_frame)
+        model_label_frame.pack(fill=tk.X, pady=(5, 2))
+        
+        ctk.CTkLabel(
+            model_label_frame, 
+            text="模型名称:"
+        ).pack(side=tk.LEFT, padx=5)
+        
+        model_frame = ctk.CTkFrame(general_frame)
+        model_frame.pack(fill=tk.X, pady=(0, 10))
+        
         self.model_name_var = tk.StringVar()
         ctk.CTkEntry(
-            general_frame,
+            model_frame,
             textvariable=self.model_name_var,
-            width=350
-        ).pack(fill=tk.X, pady=(0, 15))
+            placeholder_text="gpt-3.5-turbo"
+        ).pack(fill=tk.X, padx=5)
 
         # === 高级设置标签页 ===
         advanced_frame = ctk.CTkFrame(advanced_tab)
@@ -489,74 +773,115 @@ class ConfigDialog:
         self.proxy_url_entry.pack(fill=tk.X, padx=10, pady=(0, 10))
         self.proxy_url_entry.configure(state="disabled")
 
-        # 底部按钮
-        button_frame = ctk.CTkFrame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(20, 0))
-
-        ctk.CTkButton(
-            button_frame,
-            text="测试连接",
-            command=self._test_connection,
-            width=100
-        ).pack(side=tk.LEFT)
-
-        ctk.CTkButton(
-            button_frame,
-            text="取消",
-            command=self._on_cancel,
-            width=100
-        ).pack(side=tk.RIGHT, padx=(10, 0))
-
-        ctk.CTkButton(
-            button_frame,
-            text="保存",
-            command=self._on_save,
-            width=100
-        ).pack(side=tk.RIGHT)
-
     def _create_tk_ui(self):
-        """创建Tkinter UI"""
+        """创建标准Tkinter UI"""
         dialog = self.dialog
+        dialog.configure(background=self._get_bg_color())
 
         # 主框架
-        main_frame = ttk.Frame(dialog, padding=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(dialog)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # 配置档案管理区域
+        profile_frame = ttk.Frame(main_frame)
+        profile_frame.pack(fill=tk.X, pady=(0, 15))
+
+        ttk.Label(
+            profile_frame,
+            text="配置档案:",
+            font=("Microsoft YaHei UI", 11)
+        ).pack(side=tk.LEFT, padx=(0, 5), pady=10)
+
+        # 配置档案下拉选择框
+        profile_combobox = ttk.Combobox(
+            profile_frame,
+            values=self.profiles,
+            textvariable=self.profile_var,
+            width=18,
+            state="readonly"
+        )
+        profile_combobox.pack(side=tk.LEFT, padx=5, pady=10)
+        profile_combobox.bind("<<ComboboxSelected>>", lambda event: self._on_profile_change(profile_combobox.get()))
+
+        # 配置档案管理按钮
+        ttk.Button(
+            profile_frame,
+            text="另存为...",
+            width=8,
+            command=self._save_as_new_profile
+        ).pack(side=tk.LEFT, padx=5, pady=10)
+
+        ttk.Button(
+            profile_frame,
+            text="删除",
+            width=6,
+            command=self._delete_current_profile,
+            style="Danger.TButton"  # 假设有一个危险按钮样式
+        ).pack(side=tk.LEFT, padx=5, pady=10)
 
         # 标题
-        ttk.Label(
+        title_label = ttk.Label(
             main_frame,
             text="AI模型配置",
-            font=("TkDefaultFont", 14, "bold")
-        ).pack(pady=(0, 20))
+            font=("Microsoft YaHei UI", 16, "bold")
+        )
+        title_label.pack(pady=(0, 20))
 
-        # 创建选项卡
-        tab_control = ttk.Notebook(main_frame)
-        tab_control.pack(fill=tk.BOTH, expand=True)
+        # 底部按钮 (移到选项卡之前创建和pack)
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(20, 0))
+
+        ttk.Button(
+            button_frame,
+            text="测试连接",
+            command=self._test_connection
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Button(
+            button_frame,
+            text="取消",
+            command=self._on_cancel
+        ).pack(side=tk.RIGHT, padx=(10, 0))
+
+        ttk.Button(
+            button_frame,
+            text="保存",
+            command=self._on_save
+        ).pack(side=tk.RIGHT)
+
+        # 创建选项卡 (在按钮框架之后pack，使其填充剩余空间)
+        tab_view = ttk.Notebook(main_frame)
+        tab_view.pack(fill=tk.BOTH, expand=True)
 
         # 创建标签页
-        general_tab = ttk.Frame(tab_control, padding=10)
-        advanced_tab = ttk.Frame(tab_control, padding=10)
+        general_tab = ttk.Frame(tab_view)
+        advanced_tab = ttk.Frame(tab_view)
 
-        tab_control.add(general_tab, text="通用配置")
-        tab_control.add(advanced_tab, text="高级设置")
+        tab_view.add(general_tab, text="通用配置")
+        tab_view.add(advanced_tab, text="高级设置")
 
         # === 通用配置标签页 ===
-        # 模型提供商
-        ttk.Label(general_tab, text="模型提供商:").pack(anchor=tk.W, pady=(10, 5))
+        # 配置general_tab的列权重
+        general_tab.grid_columnconfigure(1, weight=1)
+
+        # 模型提供商 (Row 0)
+        ttk.Label(general_tab, text="模型提供商:").grid(row=0, column=0, sticky=tk.W, pady=(10, 5), padx=5)
 
         self.provider_var = tk.StringVar()
         provider_combo = ttk.Combobox(
             general_tab,
             textvariable=self.provider_var,
-            values=["OpenAI", "智谱AI", "讯飞星火", "百度文心", "硅基流动", "自定义"]
+            values=["OpenAI", "智谱AI", "讯飞星火", "百度文心", "硅基流动", "自定义"],
+            state="readonly"
         )
-        provider_combo.pack(fill=tk.X, pady=(0, 15))
+        provider_combo.grid(row=0, column=1, sticky="ew", pady=(10, 15), padx=5)
 
-        # API密钥
-        ttk.Label(general_tab, text="API密钥:").pack(anchor=tk.W, pady=(0, 5))
+        # API密钥 (Row 1, 2)
+        ttk.Label(general_tab, text="API密钥:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5), padx=5)
 
         key_frame = ttk.Frame(general_tab)
-        key_frame.pack(fill=tk.X, pady=(0, 15))
+        key_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 15), padx=5)
+        key_frame.grid_columnconfigure(0, weight=1) # 让输入框填充
 
         self.api_key_var = tk.StringVar()
         self.api_key_entry = ttk.Entry(
@@ -564,7 +889,7 @@ class ConfigDialog:
             textvariable=self.api_key_var,
             show="*"
         )
-        self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.api_key_entry.grid(row=0, column=0, sticky="ew")
 
         self.show_key_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
@@ -572,31 +897,34 @@ class ConfigDialog:
             text="显示",
             variable=self.show_key_var,
             command=self._toggle_key_visibility
-        ).pack(side=tk.RIGHT, padx=(10, 0))
+        ).grid(row=0, column=1, padx=(10, 0))
 
-        # API URL
-        ttk.Label(general_tab, text="API URL:").pack(anchor=tk.W, pady=(0, 5))
+        # API URL (Row 3, 4)
+        ttk.Label(general_tab, text="API URL:").grid(row=3, column=0, sticky=tk.W, pady=(0, 5), padx=5)
 
         self.api_url_var = tk.StringVar()
         ttk.Entry(
             general_tab,
             textvariable=self.api_url_var
-        ).pack(fill=tk.X, pady=(0, 15))
+        ).grid(row=4, column=1, sticky="ew", pady=(0, 15), padx=5)
 
-        # 模型名称
-        ttk.Label(general_tab, text="模型名称:").pack(anchor=tk.W, pady=(0, 5))
+        # 模型名称 (Row 5, 6)
+        ttk.Label(general_tab, text="模型名称:").grid(row=5, column=0, sticky=tk.W, pady=(0, 5), padx=5)
 
         self.model_name_var = tk.StringVar()
         ttk.Entry(
             general_tab,
             textvariable=self.model_name_var
-        ).pack(fill=tk.X, pady=(0, 15))
+        ).grid(row=6, column=1, sticky="ew", pady=(0, 15), padx=5)
 
         # === 高级设置标签页 ===
-        # 最大Token数
-        ttk.Label(advanced_tab, text="最大Token数:").pack(anchor=tk.W, pady=(10, 5))
+        advanced_frame = ttk.Frame(advanced_tab)
+        advanced_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        token_frame = ttk.Frame(advanced_tab)
+        # 最大Token数
+        ttk.Label(advanced_frame, text="最大Token数:").pack(anchor=tk.W, pady=(10, 5))
+
+        token_frame = ttk.Frame(advanced_frame)
         token_frame.pack(fill=tk.X, pady=(0, 15))
 
         self.max_tokens_var = tk.IntVar(value=4000)
@@ -606,7 +934,7 @@ class ConfigDialog:
             to=16000,
             variable=self.max_tokens_var,
             orient=tk.HORIZONTAL
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, pady=10)
 
         max_tokens_display = ttk.Label(token_frame, text="4000", width=8)
         max_tokens_display.pack(side=tk.RIGHT, padx=(10, 0))
@@ -635,28 +963,6 @@ class ConfigDialog:
         )
         self.proxy_url_entry.pack(fill=tk.X, padx=10, pady=(0, 10))
         self.proxy_url_entry.configure(state="disabled")
-
-        # 底部按钮
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(20, 0))
-
-        ttk.Button(
-            button_frame,
-            text="测试连接",
-            command=self._test_connection
-        ).pack(side=tk.LEFT)
-
-        ttk.Button(
-            button_frame,
-            text="取消",
-            command=self._on_cancel
-        ).pack(side=tk.RIGHT, padx=(10, 0))
-
-        ttk.Button(
-            button_frame,
-            text="保存",
-            command=self._on_save
-        ).pack(side=tk.RIGHT)
 
     def _toggle_key_visibility(self):
         """切换API密钥显示/隐藏"""
@@ -738,6 +1044,42 @@ class ConfigDialog:
                 error_msg = error_msg[:500] + "..."
             messagebox.showerror("连接失败", f"无法连接到API:\n\n{error_msg}", parent=self.dialog)
 
+    def _save_to_config_file(self, config):
+        """
+        保存配置到文件
+
+        Args:
+            config: 配置字典
+        """
+        try:
+            # 获取当前选择的配置档案名称
+            profile_name = self.profile_var.get()
+
+            # 保存到指定配置档案
+            save_profile(profile_name, config)
+
+            # 设置为当前活动配置
+            set_current_profile(profile_name)
+
+            # 同时保存一份到旧的配置文件路径，保持兼容性
+            config_dir = Path("config")
+            config_dir.mkdir(exist_ok=True)
+            config_file = _config_path
+
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+
+            print(f"配置已保存到 {profile_name} 和旧版配置文件")
+
+            # 更新全局AI引擎实例的配置
+            global _ai_engine_instance
+            if _ai_engine_instance:
+                _ai_engine_instance.update_config(config)
+
+        except Exception as e:
+            print(f"保存配置文件时出错: {e}")
+            messagebox.showwarning("警告", f"保存配置文件时出错: {e}", parent=self.dialog)
+
     def _on_save(self):
         """保存配置并关闭对话框"""
         config = self._get_config()
@@ -762,7 +1104,10 @@ class ConfigDialog:
         # 保存配置到结果
         self.result = config
 
-        # 保存到配置文件
+        # 获取当前选择的配置档案名称
+        profile_name = self.profile_var.get()
+
+        # 保存到当前选择的配置档案
         self._save_to_config_file(config)
 
         # 调用回调函数
@@ -777,30 +1122,164 @@ class ConfigDialog:
         self.result = None
         self.dialog.destroy()
 
-    def _save_to_config_file(self, config):
-        """保存配置到文件"""
+    def _on_profile_change(self, profile_name):
+        """
+        当配置档案改变时的处理
+
+        Args:
+            profile_name: 选择的配置档案名称
+        """
+        if profile_name == self.current_profile_name:
+            return
+
+        # 询问是否保存当前修改
+        if messagebox.askyesno("保存修改",
+                               f"切换到配置档案 {profile_name} 前，是否保存当前对 {self.current_profile_name} 的修改？",
+                               parent=self.dialog):
+            current_config = self._get_config()
+            save_profile(self.current_profile_name, current_config)
+
+        # 加载选择的配置档案
         try:
-            config_dir = Path("config")
-            config_dir.mkdir(exist_ok=True)
+            new_config = load_profile(profile_name)
 
-            config_file = config_dir / "ai_config.json"
+            # 更新当前选择的配置档案名称
+            self.current_profile_name = profile_name
 
-            # 创建副本，确保保存所有配置包括API密钥
-            save_config = config.copy()
+            # 更新UI显示
+            self.config = new_config
+            self._load_config()
 
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(save_config, f, ensure_ascii=False, indent=2)
-
-            print(f"配置已保存到 {config_file}")
-
-            # 更新全局AI引擎实例的配置
-            global _ai_engine_instance
-            if _ai_engine_instance:
-                _ai_engine_instance.update_config(config)
-
+            print(f"切换到配置档案: {profile_name}")
         except Exception as e:
-            print(f"保存配置文件时出错: {e}")
-            messagebox.showwarning("警告", f"保存配置文件时出错: {e}", parent=self.dialog)
+            messagebox.showerror("错误", f"加载配置档案失败: {e}", parent=self.dialog)
+            # 重置下拉框为当前配置档案
+            self.profile_var.set(self.current_profile_name)
+
+    def _save_as_new_profile(self):
+        """保存为新的配置档案"""
+        # 询问新配置档案名称
+        new_name = simpledialog.askstring(
+            "保存为新配置档案",
+            "请输入新配置档案名称:",
+            parent=self.dialog
+        )
+
+        if not new_name:
+            return
+
+        # 检查名称是否有效
+        if not re.match(r'^[a-zA-Z0-9_\-\u4e00-\u9fa5]+$', new_name):
+            messagebox.showerror("错误", "配置名称只能包含字母、数字、下划线、中文和连字符", parent=self.dialog)
+            return
+
+        # 检查是否已存在同名配置
+        if new_name in self.profiles:
+            if not messagebox.askyesno("确认覆盖", f"配置档案 {new_name} 已存在，是否覆盖？", parent=self.dialog):
+                return
+
+        # 获取当前配置
+        current_config = self._get_config()
+
+        try:
+            # 保存为新配置档案
+            save_profile(new_name, current_config)
+
+            # 刷新配置档案列表
+            self.profiles = list_profiles()
+
+            # 更新下拉框选项
+            if hasattr(self, 'dialog') and self.dialog.winfo_exists():
+                profile_combobox = None
+
+                # 查找配置档案下拉框
+                for widget in self.dialog.winfo_children():
+                    if isinstance(widget, ctk.CTkFrame):
+                        for w in widget.winfo_children():
+                            if isinstance(w, ctk.CTkFrame):
+                                for cb in w.winfo_children():
+                                    if isinstance(cb, ctk.CTkComboBox):
+                                        profile_combobox = cb
+                                        break
+
+                # 更新下拉框选项
+                if profile_combobox:
+                    profile_combobox.configure(values=self.profiles)
+
+            # 设置当前选择的配置档案
+            self.profile_var.set(new_name)
+            self.current_profile_name = new_name
+
+            # 设置为当前活动配置
+            set_current_profile(new_name)
+
+            messagebox.showinfo("成功", f"已将当前配置保存为 {new_name}", parent=self.dialog)
+        except Exception as e:
+            messagebox.showerror("错误", f"保存配置档案失败: {e}", parent=self.dialog)
+
+    def _delete_current_profile(self):
+        """删除当前配置档案"""
+        # 获取当前选择的配置档案
+        profile_name = self.profile_var.get()
+
+        # 不允许删除默认配置
+        if profile_name == "default":
+            messagebox.showinfo("提示", "默认配置不能被删除", parent=self.dialog)
+            return
+
+        # 确认删除
+        if not messagebox.askyesno("确认删除", f"确定要删除配置档案 {profile_name} 吗？此操作不可恢复。",
+                                   parent=self.dialog):
+            return
+
+        try:
+            # 删除配置档案
+            if delete_profile(profile_name):
+                # 刷新配置档案列表
+                self.profiles = list_profiles()
+
+                # 切换到默认配置
+                self.profile_var.set("default")
+                self.current_profile_name = "default"
+
+                # 加载默认配置
+                new_config = load_profile("default")
+                self.config = new_config
+                self._load_config()
+
+                # 更新下拉框选项
+                if hasattr(self, 'dialog') and self.dialog.winfo_exists():
+                    profile_combobox = None
+
+                    # 查找配置档案下拉框
+                    for widget in self.dialog.winfo_children():
+                        if isinstance(widget, ctk.CTkFrame):
+                            for w in widget.winfo_children():
+                                if isinstance(w, ctk.CTkFrame):
+                                    for cb in w.winfo_children():
+                                        if isinstance(cb, ctk.CTkComboBox):
+                                            profile_combobox = cb
+                                            break
+
+                    # 更新下拉框选项
+                    if profile_combobox:
+                        profile_combobox.configure(values=self.profiles)
+
+                messagebox.showinfo("成功", f"已删除配置档案 {profile_name}", parent=self.dialog)
+            else:
+                messagebox.showerror("错误", f"删除配置档案失败", parent=self.dialog)
+        except Exception as e:
+            messagebox.showerror("错误", f"删除配置档案时出错: {e}", parent=self.dialog)
+
+    def _get_bg_color(self):
+        """获取系统背景颜色"""
+        try:
+            # 尝试获取系统背景颜色
+            bg_color = self.dialog.cget("background")
+            return bg_color
+        except:
+            # 如果失败，返回白色
+            return "white"
 
 
 class OptimizeDialog:
@@ -1127,569 +1606,551 @@ class OptimizeDialog:
         self.content_text.bind("<KeyRelease>", self._update_word_count)
 
     def _create_tk_ui(self):
-        """创建Tkinter UI"""
+        """创建标准Tkinter UI"""
         dialog = self.dialog
+        dialog.configure(background=self._get_bg_color())
 
         # 主框架
-        main_frame = ttk.Frame(dialog, padding=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(dialog)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
-        # 顶部标题
-        ttk.Label(
-            main_frame,
-            text="小说内容优化",
-            font=("TkDefaultFont", 14, "bold")
-        ).pack(pady=(0, 10))
-
-        # 创建左右分栏
-        paned_window = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
-        paned_window.pack(fill=tk.BOTH, expand=True, pady=10)
-
-        # === 左侧：原始内容 ===
-        left_frame = ttk.Frame(paned_window)
-
-        # 左侧标题
-        ttk.Label(
-            left_frame,
-            text="原始内容",
-            font=("TkDefaultFont", 12, "bold")
-        ).pack(pady=(5, 5), anchor=tk.W)
-
-        # 原始内容文本区域
-        self.content_text = Text(left_frame, wrap="word")
-        content_scrollbar = ttk.Scrollbar(left_frame, command=self.content_text.yview)
-        self.content_text.configure(yscrollcommand=content_scrollbar.set)
-
-        self.content_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5), pady=5)
-        content_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
-
-        # 字数统计标签
-        self.original_word_count_var = tk.StringVar(value="字数：0")
-        ttk.Label(
-            left_frame,
-            textvariable=self.original_word_count_var
-        ).pack(pady=5, anchor=tk.E)
-
-        # 添加左侧面板到分栏
-        paned_window.add(left_frame, weight=1)
-
-        # === 右侧：优化设置和结果 ===
-        right_frame = ttk.Frame(paned_window)
-
-        # 右侧使用选项卡布局
-        tab_control = ttk.Notebook(right_frame)
-        tab_control.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        # 创建"优化设置"标签页
-        settings_tab = ttk.Frame(tab_control)
-        tab_control.add(settings_tab, text="优化设置")
-
-        # 创建"优化结果"标签页
-        result_tab = ttk.Frame(tab_control)
-        tab_control.add(result_tab, text="优化结果")
-
-        # === 优化设置标签页 ===
-        settings_frame = ttk.Frame(settings_tab, padding=10)
-        settings_frame.pack(fill=tk.BOTH, expand=True)
-
-        # 字数处理设置
-        word_count_frame = ttk.Frame(settings_frame)
-        word_count_frame.pack(fill=tk.X, pady=(5, 10))
+        # 配置档案管理区域
+        profile_frame = ttk.Frame(main_frame)
+        profile_frame.pack(fill=tk.X, pady=(0, 15))
 
         ttk.Label(
-            word_count_frame,
-            text="字数处理:"
+            profile_frame,
+            text="配置档案:",
+            font=("Microsoft YaHei UI", 11)
         ).pack(side=tk.LEFT, padx=(0, 5), pady=10)
 
-        self.word_count_option_var = tk.StringVar(value="保持原有字数")
-        word_count_combo = ttk.Combobox(
-            word_count_frame,
-            textvariable=self.word_count_option_var,
-            values=["保持原有字数", "缩减字数", "扩展字数"],
-            width=15,
+        # 配置档案下拉选择框
+        profile_combobox = ttk.Combobox(
+            profile_frame,
+            values=self.profiles,
+            textvariable=self.profile_var,
+            width=18,
             state="readonly"
         )
-        word_count_combo.pack(side=tk.LEFT, padx=5, pady=10)
+        profile_combobox.pack(side=tk.LEFT, padx=5, pady=10)
+        profile_combobox.bind("<<ComboboxSelected>>", lambda event: self._on_profile_change(profile_combobox.get()))
 
-        self.word_count_ratio_var = tk.IntVar(value=100)
-        self.word_count_ratio_slider = ttk.Scale(
-            word_count_frame,
-            from_=50,
-            to=300,
-            variable=self.word_count_ratio_var,
-            orient=tk.HORIZONTAL
+        # 配置档案管理按钮
+        ttk.Button(
+            profile_frame,
+            text="另存为...",
+            width=8,
+            command=self._save_as_new_profile
+        ).pack(side=tk.LEFT, padx=5, pady=10)
+
+        ttk.Button(
+            profile_frame,
+            text="删除",
+            width=6,
+            command=self._delete_current_profile,
+            style="Danger.TButton"  # 假设有一个危险按钮样式
+        ).pack(side=tk.LEFT, padx=5, pady=10)
+
+        # 标题
+        title_label = ttk.Label(
+            main_frame,
+            text="AI模型配置",
+            font=("Microsoft YaHei UI", 16, "bold")
         )
-        self.word_count_ratio_slider.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True, pady=10)
-        self.word_count_ratio_slider.state(["disabled"])
+        title_label.pack(pady=(0, 20))
 
-        self.word_count_ratio_label = ttk.Label(
-            word_count_frame,
-            text="100%",
-            width=5
-        )
-        self.word_count_ratio_label.pack(side=tk.RIGHT, padx=(5, 0), pady=10)
+        # 底部按钮 (移到选项卡之前创建和pack)
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(20, 0))
 
-        # 相似度设置
-        similarity_frame = ttk.Frame(settings_frame)
-        similarity_frame.pack(fill=tk.X, pady=(0, 10))
-
-        ttk.Label(
-            similarity_frame,
-            text="保留相似度:"
-        ).pack(side=tk.LEFT, padx=(0, 5), pady=10)
-
-        self.similarity_var = tk.IntVar(value=70)
-        similarity_slider = ttk.Scale(
-            similarity_frame,
-            from_=10,
-            to=90,
-            variable=self.similarity_var,
-            orient=tk.HORIZONTAL
-        )
-        similarity_slider.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True, pady=10)
-
-        self.similarity_label = ttk.Label(
-            similarity_frame,
-            text="70%",
-            width=5
-        )
-        self.similarity_label.pack(side=tk.RIGHT, padx=(5, 0), pady=10)
-
-        # 优化选项
-        options_frame = ttk.LabelFrame(settings_frame, text="优化选项")
-        options_frame.pack(fill=tk.X, pady=(0, 10))
-
-        # 优化选项复选框
-        self.optimize_skills_var = tk.BooleanVar(value=False)
-        self.optimize_scenes_var = tk.BooleanVar(value=False)
-        self.optimize_characters_var = tk.BooleanVar(value=False)
-        self.optimize_plot_var = tk.BooleanVar(value=False)
-
-        ttk.Checkbutton(
-            options_frame,
-            text="优化功法描写",
-            variable=self.optimize_skills_var
-        ).pack(anchor=tk.W, padx=10, pady=2)
-
-        ttk.Checkbutton(
-            options_frame,
-            text="优化场景描写",
-            variable=self.optimize_scenes_var
-        ).pack(anchor=tk.W, padx=10, pady=2)
-
-        ttk.Checkbutton(
-            options_frame,
-            text="优化人物刻画",
-            variable=self.optimize_characters_var
-        ).pack(anchor=tk.W, padx=10, pady=2)
-
-        ttk.Checkbutton(
-            options_frame,
-            text="优化情节结构",
-            variable=self.optimize_plot_var
-        ).pack(anchor=tk.W, padx=10, pady=2)
-
-        # 自定义要求
-        custom_frame = ttk.LabelFrame(settings_frame, text="自定义优化要求")
-        custom_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        self.custom_requirements_text = Text(custom_frame, height=5)
-        custom_scrollbar = ttk.Scrollbar(custom_frame, command=self.custom_requirements_text.yview)
-        self.custom_requirements_text.configure(yscrollcommand=custom_scrollbar.set)
-
-        self.custom_requirements_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=5)
-        custom_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
-
-        # 优化按钮
-        optimize_button = ttk.Button(
-            settings_frame,
-            text="开始优化",
-            command=self._on_optimize_clicked
-        )
-        optimize_button.pack(pady=(0, 10))
-
-        # === 优化结果标签页 ===
-        result_frame = ttk.Frame(result_tab, padding=10)
-        result_frame.pack(fill=tk.BOTH, expand=True)
-
-        # 优化结果文本区域
-        self.result_text = Text(result_frame, wrap="word")
-        result_scrollbar = ttk.Scrollbar(result_frame, command=self.result_text.yview)
-        self.result_text.configure(yscrollcommand=result_scrollbar.set)
-
-        self.result_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5), pady=5)
-        result_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
-
-        # 结果字数统计标签
-        self.result_word_count_var = tk.StringVar(value="字数：0")
-        ttk.Label(
-            result_frame,
-            textvariable=self.result_word_count_var
-        ).pack(pady=5, anchor=tk.E)
-
-        # 底部按钮区域
-        button_frame = ttk.Frame(result_frame)
-        button_frame.pack(fill=tk.X, pady=(5, 10))
-
-        # 复制结果按钮
         ttk.Button(
             button_frame,
-            text="复制结果",
-            command=self._on_copy_result
+            text="测试连接",
+            command=self._test_connection
         ).pack(side=tk.LEFT, padx=(0, 10))
 
-        # 应用结果按钮
         ttk.Button(
             button_frame,
-            text="应用结果",
-            command=self._on_apply_result
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        # 保存为新条目按钮
+            text="取消",
+            command=self._on_cancel
+        ).pack(side=tk.RIGHT, padx=(10, 0))
+
         ttk.Button(
             button_frame,
-            text="保存为新条目",
-            command=self._on_save_as_new
-        ).pack(side=tk.LEFT)
-
-        # 添加右侧面板到分栏
-        paned_window.add(right_frame, weight=1)
-
-        # === 底部按钮区域 ===
-        bottom_frame = ttk.Frame(main_frame)
-        bottom_frame.pack(fill=tk.X, pady=(10, 0))
-
-        # 关闭按钮
-        ttk.Button(
-            bottom_frame,
-            text="关闭",
-            command=self._on_close
+            text="保存",
+            command=self._on_save
         ).pack(side=tk.RIGHT)
 
-        # 绑定事件
-        self.word_count_option_var.trace_add("write", self._on_word_count_option_changed)
-        self.word_count_ratio_var.trace_add("write", self._on_word_count_ratio_changed)
-        self.similarity_var.trace_add("write", self._on_similarity_changed)
+        # 创建选项卡 (在按钮框架之后pack，使其填充剩余空间)
+        tab_view = ttk.Notebook(main_frame)
+        tab_view.pack(fill=tk.BOTH, expand=True)
 
-        # 添加文本更改时更新字数统计的事件
-        self.content_text.bind("<KeyRelease>", self._update_word_count)
+        # 创建标签页
+        general_tab = ttk.Frame(tab_view)
+        advanced_tab = ttk.Frame(tab_view)
 
-    def _on_word_count_option_changed(self, *args):
-        """当字数处理选项改变时的处理"""
-        option = self.word_count_option_var.get()
+        tab_view.add(general_tab, text="通用配置")
+        tab_view.add(advanced_tab, text="高级设置")
 
-        if option == "保持原有字数":
-            # 禁用比例滑块
-            if HAS_CTK:
-                self.word_count_ratio_slider.configure(state="disabled")
-            else:
-                self.word_count_ratio_slider.state(["disabled"])
+        # === 通用配置标签页 ===
+        # 配置general_tab的列权重
+        general_tab.grid_columnconfigure(1, weight=1)
 
-            # 重置比例
-            self.word_count_ratio_var.set(100)
+        # 模型提供商 (Row 0)
+        ttk.Label(general_tab, text="模型提供商:").grid(row=0, column=0, sticky=tk.W, pady=(10, 5), padx=5)
+
+        self.provider_var = tk.StringVar()
+        provider_combo = ttk.Combobox(
+            general_tab,
+            textvariable=self.provider_var,
+            values=["OpenAI", "智谱AI", "讯飞星火", "百度文心", "硅基流动", "自定义"],
+            state="readonly"
+        )
+        provider_combo.grid(row=0, column=1, sticky="ew", pady=(10, 15), padx=5)
+
+        # API密钥 (Row 1, 2)
+        ttk.Label(general_tab, text="API密钥:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5), padx=5)
+
+        key_frame = ttk.Frame(general_tab)
+        key_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 15), padx=5)
+        key_frame.grid_columnconfigure(0, weight=1) # 让输入框填充
+
+        self.api_key_var = tk.StringVar()
+        self.api_key_entry = ttk.Entry(
+            key_frame,
+            textvariable=self.api_key_var,
+            show="*"
+        )
+        self.api_key_entry.grid(row=0, column=0, sticky="ew")
+
+        self.show_key_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            key_frame,
+            text="显示",
+            variable=self.show_key_var,
+            command=self._toggle_key_visibility
+        ).grid(row=0, column=1, padx=(10, 0))
+
+        # API URL (Row 3, 4)
+        ttk.Label(general_tab, text="API URL:").grid(row=3, column=0, sticky=tk.W, pady=(0, 5), padx=5)
+
+        self.api_url_var = tk.StringVar()
+        ttk.Entry(
+            general_tab,
+            textvariable=self.api_url_var
+        ).grid(row=4, column=1, sticky="ew", pady=(0, 15), padx=5)
+
+        # 模型名称 (Row 5, 6)
+        ttk.Label(general_tab, text="模型名称:").grid(row=5, column=0, sticky=tk.W, pady=(0, 5), padx=5)
+
+        self.model_name_var = tk.StringVar()
+        ttk.Entry(
+            general_tab,
+            textvariable=self.model_name_var
+        ).grid(row=6, column=1, sticky="ew", pady=(0, 15), padx=5)
+
+        # === 高级设置标签页 ===
+        advanced_frame = ttk.Frame(advanced_tab)
+        advanced_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 最大Token数
+        ttk.Label(advanced_frame, text="最大Token数:").pack(anchor=tk.W, pady=(10, 5))
+
+        token_frame = ttk.Frame(advanced_frame)
+        token_frame.pack(fill=tk.X, pady=(0, 15))
+
+        self.max_tokens_var = tk.IntVar(value=4000)
+        ttk.Scale(
+            token_frame,
+            from_=500,
+            to=16000,
+            variable=self.max_tokens_var,
+            orient=tk.HORIZONTAL
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, pady=10)
+
+        max_tokens_display = ttk.Label(token_frame, text="4000", width=8)
+        max_tokens_display.pack(side=tk.RIGHT, padx=(10, 0))
+
+        def update_max_tokens_label(*args):
+            max_tokens_display.configure(text=str(self.max_tokens_var.get()))
+
+        self.max_tokens_var.trace_add("write", update_max_tokens_label)
+
+        # 代理设置
+        proxy_frame = ttk.LabelFrame(advanced_tab, text="代理设置")
+        proxy_frame.pack(fill=tk.X, pady=(10, 15))
+
+        self.use_proxy_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            proxy_frame,
+            text="使用代理",
+            variable=self.use_proxy_var,
+            command=self._toggle_proxy_state
+        ).pack(anchor=tk.W, padx=10, pady=10)
+
+        self.proxy_url_var = tk.StringVar()
+        self.proxy_url_entry = ttk.Entry(
+            proxy_frame,
+            textvariable=self.proxy_url_var
+        )
+        self.proxy_url_entry.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self.proxy_url_entry.configure(state="disabled")
+
+    def _toggle_key_visibility(self):
+        """切换API密钥显示/隐藏"""
+        if self.show_key_var.get():
+            self.api_key_entry.configure(show="")
         else:
-            # 启用比例滑块
-            if HAS_CTK:
-                self.word_count_ratio_slider.configure(state="normal")
-            else:
-                self.word_count_ratio_slider.state(["!disabled"])
+            self.api_key_entry.configure(show="*")
 
-            # 设置默认比例
-            if option == "缩减字数":
-                self.word_count_ratio_var.set(70)
-            else:  # 扩展字数
-                self.word_count_ratio_var.set(150)
-
-    def _on_word_count_ratio_changed(self, *args):
-        """当字数比例改变时的处理"""
-        self.word_count_ratio_label.configure(text=f"{self.word_count_ratio_var.get()}%")
-
-    def _on_similarity_changed(self, *args):
-        """当相似度改变时的处理"""
-        self.similarity_label.configure(text=f"{self.similarity_var.get()}%")
-
-    def _get_content(self):
-        """获取内容文本框中的内容"""
-        if HAS_CTK:
-            return self.content_text.get("0.0", "end").strip()
+    def _toggle_proxy_state(self):
+        """切换代理设置状态"""
+        if self.use_proxy_var.get():
+            self.proxy_url_entry.configure(state="normal")
         else:
-            return self.content_text.get("1.0", "end-1c").strip()
+            self.proxy_url_entry.configure(state="disabled")
 
-    def _set_content(self, content):
-        """设置内容文本框的内容"""
-        # 清空现有内容
-        if HAS_CTK:
-            self.content_text.delete("0.0", "end")
-            self.content_text.insert("0.0", content)
-        else:
-            self.content_text.delete("1.0", "end")
-            self.content_text.insert("1.0", content)
+    def _load_config(self):
+        """加载配置到UI"""
+        # 从配置对象加载
+        config = self.config
 
-        # 更新字数统计
-        self._update_word_count()
+        # 设置UI控件
+        if "provider" in config:
+            self.provider_var.set(config["provider"])
+        if "api_key" in config:
+            self.api_key_var.set(config["api_key"])
+        if "api_url" in config:
+            self.api_url_var.set(config["api_url"])
+        if "model_name" in config:
+            self.model_name_var.set(config["model_name"])
+        if "max_tokens" in config:
+            self.max_tokens_var.set(config["max_tokens"])
 
-    def _get_result(self):
-        """获取结果文本框中的内容"""
-        if HAS_CTK:
-            return self.result_text.get("0.0", "end").strip()
-        else:
-            return self.result_text.get("1.0", "end-1c").strip()
+        # 代理设置
+        if "proxy" in config and config["proxy"]:
+            self.use_proxy_var.set(True)
+            self.proxy_url_var.set(config["proxy"])
+            self.proxy_url_entry.configure(state="normal")
+        elif "proxy_url" in config and config["proxy_url"]:
+            self.use_proxy_var.set(True)
+            self.proxy_url_var.set(config["proxy_url"])
+            self.proxy_url_entry.configure(state="normal")
 
-    def _set_result(self, content):
-        """设置结果文本框的内容"""
-        # 清空现有内容
-        if HAS_CTK:
-            self.result_text.delete("0.0", "end")
-            self.result_text.insert("0.0", content)
-        else:
-            self.result_text.delete("1.0", "end")
-            self.result_text.insert("1.0", content)
-
-        # 更新结果字数统计
-        self._update_result_word_count()
-
-    def _get_custom_requirements(self):
-        """获取自定义要求文本框中的内容"""
-        if HAS_CTK:
-            return self.custom_requirements_text.get("0.0", "end").strip()
-        else:
-            return self.custom_requirements_text.get("1.0", "end-1c").strip()
-
-    def _update_word_count(self, event=None):
-        """更新原始内容的字数统计"""
-        content = self._get_content()
-
-        # 计算不同类型的字数
-        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', content))
-        english_words = len(re.findall(r'\b[a-zA-Z]+\b', content))
-        total_chars = len(content)
-
-        self.original_word_count_var.set(
-            f"字数：{chinese_chars + english_words} (中文字符：{chinese_chars}，英文单词：{english_words})")
-
-    def _update_result_word_count(self):
-        """更新优化结果的字数统计"""
-        content = self._get_result()
-
-        # 计算不同类型的字数
-        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', content))
-        english_words = len(re.findall(r'\b[a-zA-Z]+\b', content))
-        total_chars = len(content)
-
-        self.result_word_count_var.set(
-            f"字数：{chinese_chars + english_words} (中文字符：{chinese_chars}，英文单词：{english_words})")
-
-    def _get_optimize_config(self):
-        """获取优化配置"""
+    def _get_config(self):
+        """从UI获取配置"""
         return {
-            "word_count_option": self.word_count_option_var.get(),
-            "word_count_ratio": self.word_count_ratio_var.get(),
-            "similarity": self.similarity_var.get(),
-            "optimize_skills": self.optimize_skills_var.get(),
-            "optimize_scenes": self.optimize_scenes_var.get(),
-            "optimize_characters": self.optimize_characters_var.get(),
-            "optimize_plot": self.optimize_plot_var.get(),
-            "custom_requirements": self._get_custom_requirements()
+            "provider": self.provider_var.get(),
+            "api_key": self.api_key_var.get(),
+            "api_url": self.api_url_var.get(),
+            "model_name": self.model_name_var.get(),
+            "max_tokens": self.max_tokens_var.get(),
+            "proxy": self.proxy_url_var.get() if self.use_proxy_var.get() else ""
         }
 
-    def _on_optimize_clicked(self):
-        """当点击开始优化按钮时的处理"""
-        content = self._get_content()
+    def _test_connection(self):
+        """测试API连接"""
+        config = self._get_config()
 
-        if not content:
-            messagebox.showwarning("警告", "请先输入需要优化的内容", parent=self.dialog)
+        if not config["api_key"]:
+            messagebox.showerror("错误", "请先输入API密钥", parent=self.dialog)
             return
 
-        # 检查AI引擎配置
-        if not self.ai_engine.is_configured():
-            # 提示配置AI引擎
-            if messagebox.askyesno("AI配置", "AI引擎尚未配置，是否现在配置？", parent=self.dialog):
-                # 关闭当前对话框
-                self.dialog.withdraw()
-
-                # 打开配置对话框
-                config_dialog = ConfigDialog(self.parent, self.ai_engine)
-
-                # 如果配置完成，重新显示优化对话框
-                self.dialog.deiconify()
-
-                # 如果配置对话框没有正确保存配置，则退出优化
-                if not self.ai_engine.is_configured():
-                    return
-            else:
-                # 用户取消配置，不继续优化
-                return
-
-        # 获取优化配置
-        optimize_config = self._get_optimize_config()
-
-        # 显示处理中提示
-        self.dialog.config(cursor="wait")
-        if hasattr(self.dialog, "update"):
+        try:
+            self.dialog.config(cursor="wait")
             self.dialog.update()
 
-        try:
-            # 调用AI引擎进行优化
-            optimized_content = self.ai_engine.optimize_content(content, optimize_config)
+            # 创建临时AI引擎测试连接
+            test_engine = AIEngine(config)
 
-            # 保存优化结果
-            self.optimized_result = optimized_content
-
-            # 显示优化结果
-            self._set_result(optimized_content)
-
-            # 更新结果标签页
-            if HAS_CTK:
-                # 选择结果标签页
-                tabview = [child for child in self.dialog.winfo_children()[0].winfo_children()
-                           if isinstance(child, ttk.PanedWindow)][0]
-                right_frame = tabview.winfo_children()[1]
-                tab_control = [child for child in right_frame.winfo_children()
-                               if isinstance(child, ctk.CTkTabview)][0]
-                tab_control.set("优化结果")
-            else:
-                # 获取ttk.Notebook实例
-                for child in self.dialog.winfo_children():
-                    if isinstance(child, ttk.Frame):
-                        for grandchild in child.winfo_children():
-                            if isinstance(grandchild, ttk.PanedWindow):
-                                right_frame = grandchild.winfo_children()[1]
-                                for right_child in right_frame.winfo_children():
-                                    if isinstance(right_child, ttk.Notebook):
-                                        tab_control = right_child
-                                        tab_control.select(1)  # 索引为1的是结果标签页
-                                        break
+            # 简单的测试提示
+            test_prompt = "Hello, please respond with a simple greeting."
+            response = test_engine.generate_text(test_prompt)
 
             self.dialog.config(cursor="")
-            messagebox.showinfo("优化完成", "内容优化已完成！", parent=self.dialog)
+            messagebox.showinfo("连接成功", f"API连接测试成功！\n\n响应: {response[:100]}...", parent=self.dialog)
         except Exception as e:
             self.dialog.config(cursor="")
             error_msg = str(e)
             if len(error_msg) > 500:
                 error_msg = error_msg[:500] + "..."
-            messagebox.showerror("优化失败", f"内容优化过程中出错:\n{error_msg}", parent=self.dialog)
+            messagebox.showerror("连接失败", f"无法连接到API:\n\n{error_msg}", parent=self.dialog)
 
-    def _on_copy_result(self):
-        """当点击复制结果按钮时的处理"""
-        result = self._get_result()
+    def _save_to_config_file(self, config):
+        """
+        保存配置到文件
 
-        if not result:
-            messagebox.showwarning("警告", "没有可复制的优化结果", parent=self.dialog)
+        Args:
+            config: 配置字典
+        """
+        try:
+            # 获取当前选择的配置档案名称
+            profile_name = self.profile_var.get()
+
+            # 保存到指定配置档案
+            save_profile(profile_name, config)
+
+            # 设置为当前活动配置
+            set_current_profile(profile_name)
+
+            # 同时保存一份到旧的配置文件路径，保持兼容性
+            config_dir = Path("config")
+            config_dir.mkdir(exist_ok=True)
+            config_file = _config_path
+
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+
+            print(f"配置已保存到 {profile_name} 和旧版配置文件")
+
+            # 更新全局AI引擎实例的配置
+            global _ai_engine_instance
+            if _ai_engine_instance:
+                _ai_engine_instance.update_config(config)
+
+        except Exception as e:
+            print(f"保存配置文件时出错: {e}")
+            messagebox.showwarning("警告", f"保存配置文件时出错: {e}", parent=self.dialog)
+
+    def _on_save(self):
+        """保存配置并关闭对话框"""
+        config = self._get_config()
+
+        # 验证必填字段
+        if not config["api_key"]:
+            messagebox.showerror("错误", "API密钥不能为空", parent=self.dialog)
             return
 
-        # 复制到剪贴板
-        self.dialog.clipboard_clear()
-        self.dialog.clipboard_append(result)
-
-        messagebox.showinfo("复制成功", "优化结果已复制到剪贴板", parent=self.dialog)
-
-    def _on_apply_result(self):
-        """当点击应用结果按钮时的处理"""
-        result = self._get_result()
-
-        if not result:
-            messagebox.showwarning("警告", "没有可应用的优化结果", parent=self.dialog)
+        if not config["api_url"]:
+            messagebox.showerror("错误", "API URL不能为空", parent=self.dialog)
             return
 
-        # 确认是否应用
-        if messagebox.askyesno("确认应用", "确定要用优化结果替换原始内容吗？", parent=self.dialog):
-            # 保存结果到返回值
-            self.result = result
-
-            # 更新UI
-            self._set_content(result)
-
-            # 如果提供了回调函数，将结果传递给父窗口
-            if self.callback:
-                self.callback(result)
-
-            messagebox.showinfo("应用成功", "已将优化结果应用到原始内容", parent=self.dialog)
-
-    def _on_save_as_new(self):
-        """当点击保存为新条目按钮时的处理"""
-        result = self._get_result()
-
-        if not result:
-            messagebox.showwarning("警告", "没有可保存的优化结果", parent=self.dialog)
+        if not config["model_name"]:
+            messagebox.showerror("错误", "模型名称不能为空", parent=self.dialog)
             return
 
-        # 确认是否保存为新条目
-        if messagebox.askyesno("确认保存", "确定要将优化结果保存为新条目吗？", parent=self.dialog):
-            # 创建包含保存标志的字典结果
-            self.result = {
-                'content': result,
-                'save_as_new': True
-            }
+        # 更新AI引擎配置（如果提供）
+        if self.ai_engine:
+            self.ai_engine.update_config(config)
 
-            # 如果提供了回调函数，将结果传递给父窗口
-            if self.callback:
-                self.callback(self.result)
-                
-            messagebox.showinfo("操作成功", "已将优化结果传递给主程序，将保存为新条目", parent=self.dialog)
-            self.dialog.destroy()
+        # 保存配置到结果
+        self.result = config
 
-    def _on_close(self):
-        """当点击关闭按钮时的处理"""
-        # 如果有优化结果但未应用，提醒用户
-        if self.optimized_result and not self.result:
-            if messagebox.askyesno("关闭确认", "有未应用的优化结果，是否在关闭前应用？", parent=self.dialog):
-                self.result = self.optimized_result
-                # 如果提供了回调函数，将结果传递给父窗口
-                if self.callback:
-                    self.callback(self.result)
-                
+        # 获取当前选择的配置档案名称
+        profile_name = self.profile_var.get()
+
+        # 保存到当前选择的配置档案
+        self._save_to_config_file(config)
+
+        # 调用回调函数
+        if self.callback:
+            self.callback(config)
+
+        # 关闭对话框
         self.dialog.destroy()
+
+    def _on_cancel(self):
+        """取消并关闭对话框"""
+        self.result = None
+        self.dialog.destroy()
+
+    def _on_profile_change(self, profile_name):
+        """
+        当配置档案改变时的处理
+
+        Args:
+            profile_name: 选择的配置档案名称
+        """
+        if profile_name == self.current_profile_name:
+            return
+
+        # 询问是否保存当前修改
+        if messagebox.askyesno("保存修改",
+                               f"切换到配置档案 {profile_name} 前，是否保存当前对 {self.current_profile_name} 的修改？",
+                               parent=self.dialog):
+            current_config = self._get_config()
+            save_profile(self.current_profile_name, current_config)
+
+        # 加载选择的配置档案
+        try:
+            new_config = load_profile(profile_name)
+
+            # 更新当前选择的配置档案名称
+            self.current_profile_name = profile_name
+
+            # 更新UI显示
+            self.config = new_config
+            self._load_config()
+
+            print(f"切换到配置档案: {profile_name}")
+        except Exception as e:
+            messagebox.showerror("错误", f"加载配置档案失败: {e}", parent=self.dialog)
+            # 重置下拉框为当前配置档案
+            self.profile_var.set(self.current_profile_name)
+
+    def _save_as_new_profile(self):
+        """保存为新的配置档案"""
+        # 询问新配置档案名称
+        new_name = simpledialog.askstring(
+            "保存为新配置档案",
+            "请输入新配置档案名称:",
+            parent=self.dialog
+        )
+
+        if not new_name:
+            return
+
+        # 检查名称是否有效
+        if not re.match(r'^[a-zA-Z0-9_\-\u4e00-\u9fa5]+$', new_name):
+            messagebox.showerror("错误", "配置名称只能包含字母、数字、下划线、中文和连字符", parent=self.dialog)
+            return
+
+        # 检查是否已存在同名配置
+        if new_name in self.profiles:
+            if not messagebox.askyesno("确认覆盖", f"配置档案 {new_name} 已存在，是否覆盖？", parent=self.dialog):
+                return
+
+        # 获取当前配置
+        current_config = self._get_config()
+
+        try:
+            # 保存为新配置档案
+            save_profile(new_name, current_config)
+
+            # 刷新配置档案列表
+            self.profiles = list_profiles()
+
+            # 更新下拉框选项
+            if hasattr(self, 'dialog') and self.dialog.winfo_exists():
+                profile_combobox = None
+
+                # 查找配置档案下拉框
+                for widget in self.dialog.winfo_children():
+                    if isinstance(widget, ctk.CTkFrame):
+                        for w in widget.winfo_children():
+                            if isinstance(w, ctk.CTkFrame):
+                                for cb in w.winfo_children():
+                                    if isinstance(cb, ctk.CTkComboBox):
+                                        profile_combobox = cb
+                                        break
+
+                # 更新下拉框选项
+                if profile_combobox:
+                    profile_combobox.configure(values=self.profiles)
+
+            # 设置当前选择的配置档案
+            self.profile_var.set(new_name)
+            self.current_profile_name = new_name
+
+            # 设置为当前活动配置
+            set_current_profile(new_name)
+
+            messagebox.showinfo("成功", f"已将当前配置保存为 {new_name}", parent=self.dialog)
+        except Exception as e:
+            messagebox.showerror("错误", f"保存配置档案失败: {e}", parent=self.dialog)
+
+    def _delete_current_profile(self):
+        """删除当前配置档案"""
+        # 获取当前选择的配置档案
+        profile_name = self.profile_var.get()
+
+        # 不允许删除默认配置
+        if profile_name == "default":
+            messagebox.showinfo("提示", "默认配置不能被删除", parent=self.dialog)
+            return
+
+        # 确认删除
+        if not messagebox.askyesno("确认删除", f"确定要删除配置档案 {profile_name} 吗？此操作不可恢复。",
+                                   parent=self.dialog):
+            return
+
+        try:
+            # 删除配置档案
+            if delete_profile(profile_name):
+                # 刷新配置档案列表
+                self.profiles = list_profiles()
+
+                # 切换到默认配置
+                self.profile_var.set("default")
+                self.current_profile_name = "default"
+
+                # 加载默认配置
+                new_config = load_profile("default")
+                self.config = new_config
+                self._load_config()
+
+                # 更新下拉框选项
+                if hasattr(self, 'dialog') and self.dialog.winfo_exists():
+                    profile_combobox = None
+
+                    # 查找配置档案下拉框
+                    for widget in self.dialog.winfo_children():
+                        if isinstance(widget, ctk.CTkFrame):
+                            for w in widget.winfo_children():
+                                if isinstance(w, ctk.CTkFrame):
+                                    for cb in w.winfo_children():
+                                        if isinstance(cb, ctk.CTkComboBox):
+                                            profile_combobox = cb
+                                            break
+
+                    # 更新下拉框选项
+                    if profile_combobox:
+                        profile_combobox.configure(values=self.profiles)
+
+                messagebox.showinfo("成功", f"已删除配置档案 {profile_name}", parent=self.dialog)
+            else:
+                messagebox.showerror("错误", f"删除配置档案失败", parent=self.dialog)
+        except Exception as e:
+            messagebox.showerror("错误", f"删除配置档案时出错: {e}", parent=self.dialog)
+
+    def _get_bg_color(self):
+        """获取系统背景颜色"""
+        try:
+            # 尝试获取系统背景颜色
+            bg_color = self.dialog.cget("background")
+            return bg_color
+        except:
+            # 如果失败，返回白色
+            return "white"
 
 
 # --- 辅助函数 ---
 
-def load_ai_config():
+def load_ai_config(profile_name=None):
     """
     加载AI配置
+
+    Args:
+        profile_name: 要加载的配置档案名称，如果为None则加载当前活动配置
 
     Returns:
         配置字典
     """
-    config_dir = Path("config")
-    config_file = _config_path
+    # 如果未指定配置名称，使用当前活动配置
+    if profile_name is None:
+        profile_name = get_current_profile_name()
 
-    # 确保配置目录存在
-    config_dir.mkdir(exist_ok=True)
+    # 加载指定的配置档案
+    config = load_profile(profile_name)
 
-    # 默认配置
-    default_config = {
-        "provider": "OpenAI",
-        "model_name": "gpt-3.5-turbo",
-        "api_key": "",
-        "api_url": "https://api.openai.com/v1/chat/completions",
-        "max_tokens": 4000,
-        "temperature": 0.7,
-        "use_proxy": False,
-        "proxy_url": ""
-    }
-
-    # 如果配置文件存在，加载它
-    if config_file.exists():
+    # 兼容旧版本：如果配置档案为空但存在旧的配置文件，则从旧文件加载
+    if not config.get("api_key") and _config_path.exists():
         try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                loaded_config = json.load(f)
-                # 更新默认配置，保留API密钥等敏感信息
-                for key, value in loaded_config.items():
-                    if value or key not in default_config:  # 只更新非空值或新增字段
-                        default_config[key] = value
-                print(f"已加载AI配置: {config_file}")
-        except Exception as e:
-            print(f"加载AI配置时出错: {e}")
-    else:
-        # 创建默认配置文件
-        try:
-            with open(config_file, "w", encoding="utf-8") as f:
-                json.dump(default_config, indent=4, ensure_ascii=False, fp=f)
-                print(f"已创建默认AI配置: {config_file}")
-        except Exception as e:
-            print(f"创建默认AI配置时出错: {e}")
+            with open(_config_path, "r", encoding="utf-8") as f:
+                old_config = json.load(f)
+                # 只更新API密钥等敏感信息，其他保留配置档案设置
+                if old_config.get("api_key"):
+                    config["api_key"] = old_config["api_key"]
+                if old_config.get("api_url"):
+                    config["api_url"] = old_config["api_url"]
+                print(f"已从旧配置文件加载API信息")
 
-    return default_config
+                # 保存回配置档案
+                save_profile(profile_name, config)
+        except Exception as e:
+            print(f"从旧配置加载时出错: {e}")
+
+    return config
 
 
 def get_ai_engine():
@@ -1702,9 +2163,13 @@ def get_ai_engine():
     global _ai_engine_instance
 
     if _ai_engine_instance is None:
-        # 加载配置
+        # 加载当前活动的配置
         config = load_ai_config()
         # 创建AI引擎实例
         _ai_engine_instance = AIEngine(config)
+    else:
+        # 如果实例已存在，确保它使用最新的配置
+        config = load_ai_config()
+        _ai_engine_instance.update_config(config)
 
     return _ai_engine_instance
